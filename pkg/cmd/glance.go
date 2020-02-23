@@ -401,3 +401,17 @@ func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, reso
 	}
 	return metrics, nil
 }
+
+// func getClusters(out io.Writer, configAccess clientcmd.ConfigAccess) error {
+// 	config, err := clientcmd.configAccess.GetStartingConfig()
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	fmt.Fprintf(out, "NAME\n")
+// 	for name := range config.Clusters {
+// 		fmt.Fprintf(out, "%s\n", name)
+// 	}
+
+// 	return nil
+// }
