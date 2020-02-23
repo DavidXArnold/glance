@@ -15,7 +15,9 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/jedib0t/go-pretty/table"
 	"github.com/mitchellh/go-homedir"
@@ -194,19 +196,22 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 func render(nm *nodeMap, c *counter) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"Node Name", "ProviderID", "Allocatable CPU", "Allocatable MEM (Mi)", "Capacity CPU", "Capacity MEM (Mi)", "Allocated CPU Requests", "Allocated CPU Limits", "Allocated MEM Requests", "Allocated MEM Limits", "Usage CPU", "Usage Mem"})
+	t.AppendHeader(table.Row{"", "", "Allocatable", "Allocatable", "Capacity", "Capacity", "Allocated", "Allocated", "Allocated", "Allocated", "Usage", "Usage"})
+	t.AppendHeader(table.Row{"Node Name", "ProviderID", "CPU", "MEM (Mi)", "CPU", "MEM (Mi)", "CPU Req", "CPU Lim", "MEM Req", "MEM Lim", "CPU", "Mem"})
 
 	for k, v := range *nm {
+		cpuUsage, _ := strconv.ParseFloat(v.usageCPU, 32)
 		t.AppendRow([]interface{}{k, v.providerID,
 			v.allocatableCPU, int64(v.allocatableMemory / 1024 / 1024),
-			v.capacityCPU, int64(v.capacityMemory / 1024 / 1024), v.allocatedCPUrequests,
-			v.allocatedCPULimits, v.allocatedMemoryRequests, v.allocatedMemoryLimits, v.usageCPU, v.usageMemory})
-
+			v.capacityCPU, int64(v.capacityMemory / 1024 / 1024),
+			v.allocatedCPUrequests, v.allocatedCPULimits,
+			v.allocatedMemoryRequests, v.allocatedMemoryLimits,
+			fmt.Sprintf("%.2f", cpuUsage),
+			v.usageMemory})
 	}
 
-	t.AppendFooter(table.Row{"", "", "Total", c.totalAllocatableCPU, int64(c.totalAllocatableMemory / 1024 / 1024), c.totalCapacityCPU, int(c.totalCapacityMemory / 1024 / 1024)})
+	t.AppendFooter(table.Row{"Totals", "", c.totalAllocatableCPU, int64(c.totalAllocatableMemory / 1024 / 1024), c.totalCapacityCPU, int(c.totalCapacityMemory / 1024 / 1024)})
 	t.SetStyle(table.StyleBold)
-	// t.SetStyle()
 	t.Render()
 
 }
