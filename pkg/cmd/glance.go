@@ -47,6 +47,7 @@ var cfgFile string
 
 func init() {
 	cobra.OnInitialize(initConfig)
+
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -58,8 +59,7 @@ func initConfig() {
 		// Find home directory.
 		home, err := homedir.Dir()
 		if err != nil {
-			log.Println(err)
-			os.Exit(1)
+			log.Fatalln(err)
 		}
 
 		// Search config in home directory with name ".glance" (without extension).
@@ -142,13 +142,19 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	)
 
 	nm := make(nodeMap)
-	nodes := getNodes(k8sClient)
+	nodes, err := getNodes(k8sClient)
+	if err != nil {
+		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
+	}
 
-	log.Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
+	log.WithFields(log.Fields{
+		"Host": gc.restConfig.Host,
+	}).Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
+
 	for _, n := range nodes.Items {
 		podList, err := getPods(k8sClient, n.Name)
 		if err != nil {
-			log.Errorf("Error getting Pod List: %+v ", err.Error())
+			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
 		}
 
 		nm[n.Name] = describeNodeResource(*podList, &n)
@@ -195,12 +201,12 @@ func render(nm *nodeMap, c *counter) {
 
 }
 
-func getNodes(clientset *kubernetes.Clientset) (nodes *v1.NodeList) {
-	nodes, err := clientset.CoreV1().Nodes().List(metav1.ListOptions{})
+func getNodes(clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
+	nodes, err = clientset.CoreV1().Nodes().List(metav1.ListOptions{})
 	if err != nil {
-		panic(err.Error())
+		return nil, err
 	}
-	return nodes
+	return nodes, err
 }
 
 func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList, err error) {
