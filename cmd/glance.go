@@ -18,15 +18,11 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/spf13/pflag"
-
 	"github.com/davidxarnold/glance/pkg/cmd"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
 func main() {
-	flags := pflag.NewFlagSet("glance", pflag.ExitOnError)
-	pflag.CommandLine = flags
 
 	root := cmd.NewGlanceCmd(genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr})
 	if err := root.Execute(); err != nil {
