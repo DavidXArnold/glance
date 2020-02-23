@@ -38,6 +38,7 @@ import (
 	// Uncomment the following line to load the gcp plugin (only required to authenticate against GKE clusters).
 	// _ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -105,6 +106,11 @@ func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
 
 	// configFlags := genericclioptions.NewConfigFlags(true)
 	// resourceFlags := genericclioptions.NewResourceBuilderFlags()
+	flags := pflag.NewFlagSet("kubectl-glance", pflag.ExitOnError)
+	pflag.CommandLine = flags
+
+	kubeConfigFlags := genericclioptions.NewConfigFlags(false)
+	kubeResouceBuilderFlags := genericclioptions.NewResourceBuilderFlags()
 	gc, err := NewGlanceConfig(streams)
 	if err != nil {
 		log.Fatalf("Unable to create glance configuration: %v", err)
@@ -115,8 +121,8 @@ func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
 		Short: "Take a quick glance at your Kubernetes resources.",
 		Long:  "Glance allows you to quickly look at your kubernetes resource usage.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			gc.configFlags.AddFlags(cmd.Flags())
-			gc.resourceFlags.AddFlags(cmd.Flags())
+			// gc.configFlags.AddFlags(cmd.Flags())
+			// gc.resourceFlags.AddFlags(cmd.Flags())
 
 			// create the clientset
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
@@ -131,6 +137,10 @@ func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
 			return nil
 		},
 	}
+
+	flags.AddFlagSet(cmd.PersistentFlags())
+	kubeConfigFlags.AddFlags(flags)
+	kubeResouceBuilderFlags.AddFlags(flags)
 
 	return cmd
 }
