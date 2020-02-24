@@ -15,6 +15,7 @@ package cmd
 
 // NodeStats is an object to hold relevent node stats
 type NodeStats struct {
+	status                  string
 	providerID              string
 	allocatableCPU          int64
 	allocatableMemory       int64
