@@ -164,15 +164,15 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}).Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
 
 	for _, n := range nodes.Items {
-		if n.Spec.ProviderID != "" {
-			nm[n.Name].providerID = n.Spec.ProviderID
-		}
+
 		_, nc := nodeutil.GetNodeCondition(
 			&n.Status,
 			v1.NodeReady)
 
 		if nc.Type != v1.NodeReady && nc.Status != "True" {
-			nm[n.Name].status = "Not Ready"
+			nm[n.Name] = &NodeStats{
+				status: "Not Ready",
+			}
 			continue
 		}
 
@@ -180,7 +180,13 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		if err != nil {
 			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
 		}
+
 		nm[n.Name] = describeNodeResource(*podList, &n)
+
+		if n.Spec.ProviderID != "" {
+			nm[n.Name].providerID = n.Spec.ProviderID
+		}
+
 		nm[n.Name].status = "Ready"
 		nm[n.Name].allocatableCPU = n.Status.Allocatable.Cpu().Value()
 		nm[n.Name].allocatableMemory = n.Status.Allocatable.Memory().Value()
