@@ -222,7 +222,7 @@ func render(nm *nodeMap, c *counter) {
 			v.usageMemory})
 	}
 
-	t.AppendFooter(table.Row{"Totals", "", c.totalAllocatableCPU, int64(c.totalAllocatableMemory / 1024 / 1024), c.totalCapacityCPU, int(c.totalCapacityMemory / 1024 / 1024)})
+	t.AppendFooter(table.Row{"Totals", "", "", c.totalAllocatableCPU, int64(c.totalAllocatableMemory / 1024 / 1024), c.totalCapacityCPU, int(c.totalCapacityMemory / 1024 / 1024)})
 	t.SetStyle(table.StyleBold)
 	t.Render()
 
