@@ -208,8 +208,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 func render(nm *nodeMap, c *counter) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"", "", "", "Allocatable", "Allocatable", "Capacity", "Capacity", "Allocated", "Allocated", "Allocated", "Allocated", "Usage", "Usage"})
-	t.AppendHeader(table.Row{"Node Name", "Status", "ProviderID", "CPU", "MEM (Mi)", "CPU", "MEM (Mi)", "CPU Req", "CPU Lim", "MEM Req", "MEM Lim", "CPU", "Mem"})
+	t.AppendHeader(table.Row{"Node Name", "Status", "ProviderID", "Allocatable\nCPU", "Allocatable\nMEM (Mi)", "Capacity\nCPU", "Capacity\nMEM (Mi)", "Allocated\nCPU Req", "Allocated\nCPU Lim", "Allocated\nMEM Req", "Allocated\nMEM Lim", "Usage\nCPU", "Usage\nMem"})
 
 	for k, v := range *nm {
 		cpuUsage, _ := strconv.ParseFloat(v.usageCPU, 32)
