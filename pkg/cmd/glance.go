@@ -32,16 +32,16 @@ import (
 	"k8s.io/kubectl/pkg/cmd/top"
 	"k8s.io/kubectl/pkg/metricsutil"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
+	nodeutil "k8s.io/kubernetes/pkg/controller/util/node"
 	"k8s.io/metrics/pkg/apis/metrics"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 
-	// Uncomment the following line to load the gcp plugin (only required to authenticate against GKE clusters).
-	// _ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
@@ -164,12 +164,24 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}).Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
 
 	for _, n := range nodes.Items {
+		if n.Spec.ProviderID != "" {
+			nm[n.Name].providerID = n.Spec.ProviderID
+		}
+		_, nc := nodeutil.GetNodeCondition(
+			&n.Status,
+			v1.NodeReady)
+
+		if nc.Type != v1.NodeReady && nc.Status != "True" {
+			nm[n.Name].status = "Not Ready"
+			continue
+		}
+
 		podList, err := getPods(k8sClient, n.Name)
 		if err != nil {
 			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
 		}
-
 		nm[n.Name] = describeNodeResource(*podList, &n)
+		nm[n.Name].status = "Ready"
 		nm[n.Name].allocatableCPU = n.Status.Allocatable.Cpu().Value()
 		nm[n.Name].allocatableMemory = n.Status.Allocatable.Memory().Value()
 		nm[n.Name].capacityCPU = n.Status.Capacity.Cpu().Value()
@@ -196,12 +208,12 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 func render(nm *nodeMap, c *counter) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"", "", "Allocatable", "Allocatable", "Capacity", "Capacity", "Allocated", "Allocated", "Allocated", "Allocated", "Usage", "Usage"})
-	t.AppendHeader(table.Row{"Node Name", "ProviderID", "CPU", "MEM (Mi)", "CPU", "MEM (Mi)", "CPU Req", "CPU Lim", "MEM Req", "MEM Lim", "CPU", "Mem"})
+	t.AppendHeader(table.Row{"", "", "", "Allocatable", "Allocatable", "Capacity", "Capacity", "Allocated", "Allocated", "Allocated", "Allocated", "Usage", "Usage"})
+	t.AppendHeader(table.Row{"Node Name", "Status", "ProviderID", "CPU", "MEM (Mi)", "CPU", "MEM (Mi)", "CPU Req", "CPU Lim", "MEM Req", "MEM Lim", "CPU", "Mem"})
 
 	for k, v := range *nm {
 		cpuUsage, _ := strconv.ParseFloat(v.usageCPU, 32)
-		t.AppendRow([]interface{}{k, v.providerID,
+		t.AppendRow([]interface{}{k, v.status, v.providerID,
 			v.allocatableCPU, int64(v.allocatableMemory / 1024 / 1024),
 			v.capacityCPU, int64(v.capacityMemory / 1024 / 1024),
 			v.allocatedCPUrequests, v.allocatedCPULimits,
