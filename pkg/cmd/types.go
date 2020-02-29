@@ -17,12 +17,12 @@ package cmd
 type NodeStats struct {
 	status                  string
 	providerID              string
-	allocatableCPU          int64
+	allocatableCPU          float64
 	allocatableMemory       int64
-	capacityCPU             int64
+	capacityCPU             float64
 	capacityMemory          int64
-	allocatedCPUrequests    int64
-	allocatedCPULimits      int64
+	allocatedCPUrequests    float64
+	allocatedCPULimits      float64
 	allocatedMemoryRequests int64
 	allocatedMemoryLimits   int64
 	usageCPU                string
@@ -32,8 +32,14 @@ type NodeStats struct {
 type nodeMap map[string]*NodeStats
 
 type counter struct {
-	totalAllocatableCPU    int64
-	totalAllocatableMemory int64
-	totalCapacityCPU       int64
-	totalCapacityMemory    int64
+	totalAllocatableCPU          float64
+	totalAllocatableMemory       int64
+	totalCapacityCPU             float64
+	totalCapacityMemory          int64
+	totalAllocatedCPUrequests    float64
+	totalAllocatedCPULimits      float64
+	totalAllocatedMemoryRequests int64
+	totalAllocatedMemoryLimits   int64
+	totalUsageCpu                float64
+	totalUsageMemory             int64
 }

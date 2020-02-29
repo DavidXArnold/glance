@@ -105,9 +105,6 @@ func NewGlanceConfig(streams genericclioptions.IOStreams) (*GlanceConfig, error)
 
 // NewGlanceCmd provides a cobra command
 func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
-
-	// configFlags := genericclioptions.NewConfigFlags(true)
-	// resourceFlags := genericclioptions.NewResourceBuilderFlags()
 	flags := pflag.NewFlagSet("kubectl-glance", pflag.ExitOnError)
 	pflag.CommandLine = flags
 
@@ -123,8 +120,6 @@ func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
 		Short: "Take a quick glance at your Kubernetes resources.",
 		Long:  "Glance allows you to quickly look at your kubernetes resource usage.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// gc.configFlags.AddFlags(cmd.Flags())
-			// gc.resourceFlags.AddFlags(cmd.Flags())
 
 			// create the clientset
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
@@ -188,14 +183,14 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		}
 
 		nm[n.Name].status = "Ready"
-		nm[n.Name].allocatableCPU = n.Status.Allocatable.Cpu().Value()
+		nm[n.Name].allocatableCPU = toCores(n.Status.Allocatable.Cpu().MilliValue())
 		nm[n.Name].allocatableMemory = n.Status.Allocatable.Memory().Value()
-		nm[n.Name].capacityCPU = n.Status.Capacity.Cpu().Value()
-		nm[n.Name].capacityMemory = n.Status.Capacity.Memory().Value()
-		c.totalAllocatableCPU = c.totalAllocatableCPU + n.Status.Allocatable.Cpu().Value()
-		c.totalAllocatableMemory = c.totalAllocatableMemory + n.Status.Allocatable.Memory().Value()
-		c.totalCapacityCPU = c.totalCapacityCPU + n.Status.Capacity.Cpu().Value()
-		c.totalCapacityMemory = c.totalCapacityMemory + n.Status.Capacity.Memory().Value()
+		c.totalAllocatableCPU += toCores(n.Status.Allocatable.Cpu().MilliValue())
+		c.totalAllocatableMemory += n.Status.Allocatable.Memory().Value()
+		c.totalAllocatedCPUrequests += nm[n.Name].allocatedCPUrequests
+		c.totalAllocatedCPULimits += nm[n.Name].allocatedCPULimits
+		c.totalAllocatedMemoryRequests += nm[n.Name].allocatedMemoryRequests
+		c.totalAllocatedMemoryLimits += nm[n.Name].allocatedMemoryLimits
 		nodeMetrics, _, err := getNodeUtilization(k8sClient, n.Name, gc)
 		if err != nil {
 			log.Fatalf("Unable to retrieve Node metrics: %v", err)
@@ -203,6 +198,8 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 		nm[n.Name].usageCPU = nodeMetrics[0].Usage.Cpu().AsDec().String()
 		nm[n.Name].usageMemory = nodeMetrics[0].Usage.Memory().String()
+		c.totalUsageCpu += toCores(nodeMetrics[0].Usage.Cpu().MilliValue())
+		c.totalUsageMemory += nodeMetrics[0].Usage.Memory().Value()
 
 	}
 
@@ -214,21 +211,27 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 func render(nm *nodeMap, c *counter) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(table.Row{"Node Name", "Status", "ProviderID", "Allocatable\nCPU", "Allocatable\nMEM (Mi)", "Capacity\nCPU", "Capacity\nMEM (Mi)", "Allocated\nCPU Req", "Allocated\nCPU Lim", "Allocated\nMEM Req", "Allocated\nMEM Lim", "Usage\nCPU", "Usage\nMem"})
+	t.AppendHeader(table.Row{
+		"Node Name", "Status", "ProviderID", "Allocatable\nCPU", "Allocatable\nMEM (Mi)",
+		"Allocated\nCPU Req", "Allocated\nCPU Lim", "Allocated\nMEM Req", "Allocated\nMEM Lim", "Usage\nCPU", "Usage\nMem",
+	})
 
 	for k, v := range *nm {
 		cpuUsage, _ := strconv.ParseFloat(v.usageCPU, 32)
 		t.AppendRow([]interface{}{k, v.status, v.providerID,
-			v.allocatableCPU, int64(v.allocatableMemory / 1024 / 1024),
-			v.capacityCPU, int64(v.capacityMemory / 1024 / 1024),
+			v.allocatableCPU, v.allocatableMemory / 1024 / 1024,
 			v.allocatedCPUrequests, v.allocatedCPULimits,
 			v.allocatedMemoryRequests, v.allocatedMemoryLimits,
 			fmt.Sprintf("%.2f", cpuUsage),
 			v.usageMemory})
 	}
 
-	t.AppendFooter(table.Row{"Totals", "", "", c.totalAllocatableCPU, int64(c.totalAllocatableMemory / 1024 / 1024), c.totalCapacityCPU, int(c.totalCapacityMemory / 1024 / 1024)})
-	t.SetStyle(table.StyleBold)
+	t.AppendFooter(table.Row{
+		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory / 1024 / 1024,
+		c.totalAllocatedCPUrequests, c.totalAllocatedCPULimits, c.totalAllocatedMemoryRequests,
+		c.totalAllocatedMemoryLimits, fmt.Sprintf("%.2f", c.totalUsageCpu), c.totalUsageMemory / 1024 / 1024,
+	})
+	t.SetStyle(table.StyleColoredDark)
 	t.Render()
 
 }
@@ -254,48 +257,18 @@ func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList
 	return nodeNonTerminatedPodsList, nil
 }
 
-// Based on: https://github.com/kubernetes/kubernetes/pkg/kubectl/describe/versioned/describe.go#L3223
 func describeNodeResource(nodeNonTerminatedPodsList v1.PodList, node *v1.Node) *NodeStats {
-
-	allocatable := node.Status.Capacity
-	if len(node.Status.Allocatable) > 0 {
-		allocatable = node.Status.Allocatable
-	}
 
 	reqs, limits := getPodsTotalRequestsAndLimits(&nodeNonTerminatedPodsList)
 
-	// @TODO storage
-	// cpuReqs, cpuLimits, memoryReqs, memoryLimits, ephemeralstorageReqs, ephemeralstorageLimits :=
-	// reqs[corev1.ResourceCPU], limits[corev1.ResourceCPU], reqs[corev1.ResourceMemory], limits[corev1.ResourceMemory], reqs[corev1.ResourceEphemeralStorage], limits[corev1.ResourceEphemeralStorage]
 	cpuReqs, cpuLimits, memoryReqs, memoryLimits :=
 		reqs[v1.ResourceCPU], limits[v1.ResourceCPU], reqs[v1.ResourceMemory], limits[v1.ResourceMemory]
-	fractionCpuReqs := float64(0)
-	fractionCpuLimits := float64(0)
-	if allocatable.Cpu().MilliValue() != 0 {
-		fractionCpuReqs = float64(cpuReqs.MilliValue()) / float64(allocatable.Cpu().MilliValue()) * 100
-		fractionCpuLimits = float64(cpuLimits.MilliValue()) / float64(allocatable.Cpu().MilliValue()) * 100
-	}
-	fractionMemoryReqs := float64(0)
-	fractionMemoryLimits := float64(0)
-	if allocatable.Memory().Value() != 0 {
-		fractionMemoryReqs = float64(memoryReqs.Value()) / float64(allocatable.Memory().Value()) * 100
-		fractionMemoryLimits = float64(memoryLimits.Value()) / float64(allocatable.Memory().Value()) * 100
-	}
-	//@TODO add Storage
-	// fractionEphemeralStorageReqs := float64(0)
-	// fractionEphemeralStorageLimits := float64(0)
-	// if allocatable.StorageEphemeral().Value() != 0 {
-	// 	fractionEphemeralStorageReqs = float64(ephemeralstorageReqs.Value()) / float64(allocatable.StorageEphemeral().Value()) * 100
-	// 	fractionEphemeralStorageLimits = float64(ephemeralstorageLimits.Value()) / float64(allocatable.StorageEphemeral().Value()) * 100
-	// }
-	// return corev1.ResourceCPU, cpuReqs.String(), int64(fractionCpuReqs), cpuLimits.String(), int64(fractionCpuLimits),
-	// 	corev1.ResourceMemory, memoryReqs.String(), int64(fractionMemoryReqs), memoryLimits.String(), int64(fractionMemoryLimits)
 
 	ns := &NodeStats{
-		allocatedCPUrequests:    int64(fractionCpuReqs),
-		allocatedCPULimits:      int64(fractionCpuLimits),
-		allocatedMemoryRequests: int64(fractionMemoryReqs),
-		allocatedMemoryLimits:   int64(fractionMemoryLimits),
+		allocatedCPUrequests:    toCores(cpuReqs.MilliValue()),
+		allocatedCPULimits:      toCores(cpuLimits.MilliValue()),
+		allocatedMemoryRequests: memoryReqs.ScaledValue(6),
+		allocatedMemoryLimits:   memoryLimits.ScaledValue(6),
 	}
 	return ns
 
@@ -417,4 +390,8 @@ func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, reso
 		return nil, err
 	}
 	return metrics, nil
+}
+
+func toCores(in int64) float64 {
+	return (float64(in) * float64(0.001))
 }
