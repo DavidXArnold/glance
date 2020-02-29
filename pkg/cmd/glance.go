@@ -41,6 +41,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+
+	// needed to authenticate with GCP
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -142,7 +144,7 @@ func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
 	return cmd
 }
 
-//GlanceK8s displays cluster information for a given clientset
+// GlanceK8s displays cluster information for a given clientset
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	var (
 		c counter
@@ -176,7 +178,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
 		}
 
-		nm[n.Name] = describeNodeResource(*podList, &n)
+		nm[n.Name] = describeNodeResource(podList, &n)
 
 		if n.Spec.ProviderID != "" {
 			nm[n.Name].providerID = n.Spec.ProviderID
@@ -198,7 +200,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 		nm[n.Name].usageCPU = nodeMetrics[0].Usage.Cpu().AsDec().String()
 		nm[n.Name].usageMemory = nodeMetrics[0].Usage.Memory().String()
-		c.totalUsageCpu += toCores(nodeMetrics[0].Usage.Cpu().MilliValue())
+		c.totalUsageCPU += toCores(nodeMetrics[0].Usage.Cpu().MilliValue())
 		c.totalUsageMemory += nodeMetrics[0].Usage.Memory().Value()
 
 	}
@@ -229,7 +231,7 @@ func render(nm *nodeMap, c *counter) {
 	t.AppendFooter(table.Row{
 		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory / 1024 / 1024,
 		c.totalAllocatedCPUrequests, c.totalAllocatedCPULimits, c.totalAllocatedMemoryRequests,
-		c.totalAllocatedMemoryLimits, fmt.Sprintf("%.2f", c.totalUsageCpu), c.totalUsageMemory / 1024 / 1024,
+		c.totalAllocatedMemoryLimits, fmt.Sprintf("%.2f", c.totalUsageCPU), c.totalUsageMemory / 1024 / 1024,
 	})
 	t.SetStyle(table.StyleColoredDark)
 	t.Render()
@@ -245,7 +247,8 @@ func getNodes(clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
 }
 
 func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList, err error) {
-	fieldSelector, err := fields.ParseSelector("spec.nodeName=" + nodeName + ",status.phase!=" + string(v1.PodSucceeded) + ",status.phase!=" + string(v1.PodFailed))
+	fieldSelector, err := fields.ParseSelector(
+		"spec.nodeName=" + nodeName + ",status.phase!=" + string(v1.PodSucceeded) + ",status.phase!=" + string(v1.PodFailed))
 	if err != nil {
 		return nil, err
 	}
@@ -257,9 +260,9 @@ func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList
 	return nodeNonTerminatedPodsList, nil
 }
 
-func describeNodeResource(nodeNonTerminatedPodsList v1.PodList, node *v1.Node) *NodeStats {
+func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList, node *v1.Node) *NodeStats {
 
-	reqs, limits := getPodsTotalRequestsAndLimits(&nodeNonTerminatedPodsList)
+	reqs, limits := getPodsTotalRequestsAndLimits(nodeNonTerminatedPodsList)
 
 	cpuReqs, cpuLimits, memoryReqs, memoryLimits :=
 		reqs[v1.ResourceCPU], limits[v1.ResourceCPU], reqs[v1.ResourceMemory], limits[v1.ResourceMemory]
@@ -275,7 +278,8 @@ func describeNodeResource(nodeNonTerminatedPodsList v1.PodList, node *v1.Node) *
 }
 
 // Based on: https://github.com/kubernetes/kubernetes/pkg/kubectl/describe/versioned/describe.go#L3223
-func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs map[v1.ResourceName]resource.Quantity, limits map[v1.ResourceName]resource.Quantity) {
+func getPodsTotalRequestsAndLimits(podList *v1.PodList) (
+	reqs map[v1.ResourceName]resource.Quantity, limits map[v1.ResourceName]resource.Quantity) {
 	reqs, limits = map[v1.ResourceName]resource.Quantity{}, map[v1.ResourceName]resource.Quantity{}
 	for _, pod := range podList.Items {
 		podReqs, podLimits := resourcehelper.PodRequestsAndLimits(&pod)
@@ -300,7 +304,8 @@ func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs map[v1.ResourceNam
 }
 
 // reimplementation of https://github.com/kubernetes/kubernetes/blob/master/pkg/kubectl/cmd/top/top_node.go#L159
-func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *GlanceConfig) ([]metrics.NodeMetrics, map[string]v1.ResourceList, error) {
+func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *GlanceConfig) (
+	[]metrics.NodeMetrics, map[string]v1.ResourceList, error) {
 
 	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
 	if err != nil {
@@ -367,6 +372,7 @@ func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *Gl
 	return metrics.Items, allocatable, nil
 }
 
+//nolint interfacer
 func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, resourceName string, selector labels.Selector) (*metricsapi.NodeMetricsList, error) {
 	var err error
 	versionedMetrics := &metricsV1beta1api.NodeMetricsList{}

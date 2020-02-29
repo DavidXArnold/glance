@@ -13,6 +13,7 @@ limitations under the License.
 
 package cmd
 
+//nolint unused
 // NodeStats is an object to hold relevent node stats
 type NodeStats struct {
 	status                  string
@@ -31,6 +32,7 @@ type NodeStats struct {
 
 type nodeMap map[string]*NodeStats
 
+//nolint unused
 type counter struct {
 	totalAllocatableCPU          float64
 	totalAllocatableMemory       int64
@@ -40,6 +42,6 @@ type counter struct {
 	totalAllocatedCPULimits      float64
 	totalAllocatedMemoryRequests int64
 	totalAllocatedMemoryLimits   int64
-	totalUsageCpu                float64
+	totalUsageCPU                float64
 	totalUsageMemory             int64
 }
