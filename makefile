@@ -20,7 +20,7 @@ test:
 
 lint:
 	# golangci-lint run
-	docker run --rm -t -v $(PWD):/go/src/$(PACKAGE) -w /go/src/$(PACKAGE) golangci/golangci-lint:v1.22.2 golangci-lint run -v
+	docker run --rm -t -v $(PWD):/go/src/$(PACKAGE) -w /go/src/$(PACKAGE) golangci/golangci-lint:v1.23 golangci-lint run -v --timeout=5m
 
 fmt:
 	goimports -w `find . -type f -name '*.go'`
