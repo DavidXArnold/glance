@@ -17,7 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
+	"strings"
 
 	"github.com/jedib0t/go-pretty/table"
 	"github.com/mitchellh/go-homedir"
@@ -39,7 +39,6 @@ import (
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
 	// needed to authenticate with GCP
@@ -48,12 +47,10 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-var cfgFile string
-
-func init() {
-	cobra.OnInitialize(initConfig)
-
-}
+var (
+	cfgFile               string
+	KubernetesConfigFlags *genericclioptions.ConfigFlags
+)
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
@@ -78,6 +75,7 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		log.Println("Using config file:", viper.ConfigFileUsed())
 	}
+
 }
 
 // GlanceOptions contains options and configurations needed by glance
@@ -85,12 +83,11 @@ type GlanceConfig struct {
 	configFlags   *genericclioptions.ConfigFlags
 	resourceFlags *genericclioptions.ResourceBuilderFlags
 	restConfig    *rest.Config
-
 	genericclioptions.IOStreams
 }
 
 // NewGlanceConfig provides an instance of GlanceConfig with default values
-func NewGlanceConfig(streams genericclioptions.IOStreams) (*GlanceConfig, error) {
+func NewGlanceConfig() (gc *GlanceConfig, err error) {
 	cf := genericclioptions.NewConfigFlags(true)
 	rc, err := cf.ToRESTConfig()
 	if err != nil {
@@ -98,31 +95,33 @@ func NewGlanceConfig(streams genericclioptions.IOStreams) (*GlanceConfig, error)
 	}
 
 	return &GlanceConfig{
-		configFlags:   cf,
-		IOStreams:     streams,
-		resourceFlags: genericclioptions.NewResourceBuilderFlags(),
-		restConfig:    rc,
-	}, nil
+		configFlags: cf,
+		restConfig:  rc,
+	}, err
 }
 
 // NewGlanceCmd provides a cobra command
-func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
-	flags := pflag.NewFlagSet("kubectl-glance", pflag.ExitOnError)
-	pflag.CommandLine = flags
+func NewGlanceCmd() *cobra.Command {
+	var labelSelector string
+	var fieldSelector string
 
-	kubeConfigFlags := genericclioptions.NewConfigFlags(false)
-	kubeResouceBuilderFlags := genericclioptions.NewResourceBuilderFlags()
-	gc, err := NewGlanceConfig(streams)
+	KubernetesConfigFlags = genericclioptions.NewConfigFlags(false)
+
+	gc, err := NewGlanceConfig()
 	if err != nil {
 		log.Fatalf("Unable to create glance configuration: %v", err)
 	}
 
 	cmd := &cobra.Command{
-		Use:   "glance",
-		Short: "Take a quick glance at your Kubernetes resources.",
-		Long:  "Glance allows you to quickly look at your kubernetes resource usage.",
+		Use:           "glance",
+		Short:         "Take a quick glance at your Kubernetes resources.",
+		Long:          "Glance allows you to quickly look at your kubernetes resource usage.",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		PreRun: func(cmd *cobra.Command, args []string) {
+			viper.BindPFlags(cmd.Flags())
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-
 			// create the clientset
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
 			if err != nil {
@@ -137,18 +136,38 @@ func NewGlanceCmd(streams genericclioptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	flags.AddFlagSet(cmd.PersistentFlags())
-	kubeConfigFlags.AddFlags(flags)
-	kubeResouceBuilderFlags.AddFlags(flags)
+	cmd.PersistentFlags().StringVar(
+		&fieldSelector, "field-selector", "", "Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
+	viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
+	cmd.PersistentFlags().StringVar(
+		&labelSelector, "selector", "", "Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
+
+	KubernetesConfigFlags.AddFlags(cmd.Flags())
+	cobra.OnInitialize(initConfig)
+
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+
+	viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
+	viper.BindPFlags(cmd.Flags())
 
 	return cmd
 }
 
 // GlanceK8s displays cluster information for a given clientset
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
-	var (
-		c counter
-	)
+
+	c := &counter{
+		totalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
+		totalAllocatableMemory:       resource.NewQuantity(0, resource.BinarySI),
+		totalCapacityCPU:             resource.NewMilliQuantity(0, resource.DecimalSI),
+		totalCapacityMemory:          resource.NewQuantity(0, resource.BinarySI),
+		totalAllocatedCPUrequests:    resource.NewMilliQuantity(0, resource.DecimalSI),
+		totalAllocatedCPULimits:      resource.NewMilliQuantity(0, resource.DecimalSI),
+		totalAllocatedMemoryRequests: resource.NewQuantity(0, resource.BinarySI),
+		totalAllocatedMemoryLimits:   resource.NewQuantity(0, resource.BinarySI),
+		totalUsageCPU:                resource.NewMilliQuantity(0, resource.DecimalSI),
+		totalUsageMemory:             resource.NewQuantity(0, resource.BinarySI),
+	}
 
 	nm := make(nodeMap)
 	nodes, err := getNodes(k8sClient)
@@ -156,12 +175,15 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
 	}
 
+	if len(nodes.Items) == 0 {
+		return fmt.Errorf("no Nodes found")
+	}
+
 	log.WithFields(log.Fields{
 		"Host": gc.restConfig.Host,
 	}).Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
 
 	for _, n := range nodes.Items {
-
 		_, nc := nodeutil.GetNodeCondition(
 			&n.Status,
 			v1.NodeReady)
@@ -185,27 +207,29 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		}
 
 		nm[n.Name].status = "Ready"
-		nm[n.Name].allocatableCPU = toCores(n.Status.Allocatable.Cpu().MilliValue())
-		nm[n.Name].allocatableMemory = n.Status.Allocatable.Memory().Value()
-		c.totalAllocatableCPU += toCores(n.Status.Allocatable.Cpu().MilliValue())
-		c.totalAllocatableMemory += n.Status.Allocatable.Memory().Value()
-		c.totalAllocatedCPUrequests += nm[n.Name].allocatedCPUrequests
-		c.totalAllocatedCPULimits += nm[n.Name].allocatedCPULimits
-		c.totalAllocatedMemoryRequests += nm[n.Name].allocatedMemoryRequests
-		c.totalAllocatedMemoryLimits += nm[n.Name].allocatedMemoryLimits
+		nm[n.Name].allocatableCPU = n.Status.Allocatable.Cpu()
+		nm[n.Name].allocatableMemory = n.Status.Allocatable.Memory()
+
+		n.Status.Allocatable.Cpu().Add(*c.totalAllocatableCPU)
+		n.Status.Allocatable.Memory().Add(*c.totalAllocatableMemory)
+		c.totalAllocatedCPUrequests.Add(nm[n.Name].allocatedCPUrequests)
+		c.totalAllocatedCPULimits.Add(nm[n.Name].allocatedCPULimits)
+		c.totalAllocatedMemoryRequests.Add(nm[n.Name].allocatedMemoryRequests)
+		c.totalAllocatedMemoryLimits.Add(nm[n.Name].allocatedMemoryLimits)
+
 		nodeMetrics, _, err := getNodeUtilization(k8sClient, n.Name, gc)
 		if err != nil {
 			log.Fatalf("Unable to retrieve Node metrics: %v", err)
 		}
 
-		nm[n.Name].usageCPU = nodeMetrics[0].Usage.Cpu().AsDec().String()
-		nm[n.Name].usageMemory = nodeMetrics[0].Usage.Memory().String()
-		c.totalUsageCPU += toCores(nodeMetrics[0].Usage.Cpu().MilliValue())
-		c.totalUsageMemory += nodeMetrics[0].Usage.Memory().Value()
+		nm[n.Name].usageCPU = nodeMetrics[0].Usage.Cpu()
+		nm[n.Name].usageMemory = nodeMetrics[0].Usage.Memory()
 
+		nodeMetrics[0].Usage.Cpu().Add(*c.totalUsageCPU)
+		nodeMetrics[0].Usage.Memory().Add(*c.totalUsageMemory)
 	}
 
-	render(&nm, &c)
+	render(&nm, c)
 
 	return nil
 }
@@ -219,27 +243,27 @@ func render(nm *nodeMap, c *counter) {
 	})
 
 	for k, v := range *nm {
-		cpuUsage, _ := strconv.ParseFloat(v.usageCPU, 32)
 		t.AppendRow([]interface{}{k, v.status, v.providerID,
-			v.allocatableCPU, v.allocatableMemory / 1024 / 1024,
-			v.allocatedCPUrequests, v.allocatedCPULimits,
-			v.allocatedMemoryRequests, v.allocatedMemoryLimits,
-			fmt.Sprintf("%.2f", cpuUsage),
-			v.usageMemory})
+			v.allocatableCPU.AsDec().String(), v.allocatableMemory.String(),
+			v.allocatedCPUrequests.AsDec().String(), v.allocatedCPULimits.AsDec().String(),
+			v.allocatedMemoryRequests.String(), v.allocatedMemoryLimits.String(),
+			v.usageCPU.AsDec().String(),
+			v.usageMemory.String()})
 	}
 
 	t.AppendFooter(table.Row{
-		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory / 1024 / 1024,
+		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory,
 		c.totalAllocatedCPUrequests, c.totalAllocatedCPULimits, c.totalAllocatedMemoryRequests,
-		c.totalAllocatedMemoryLimits, fmt.Sprintf("%.2f", c.totalUsageCPU), c.totalUsageMemory / 1024 / 1024,
+		c.totalAllocatedMemoryLimits, c.totalUsageCPU.String(), c.totalUsageMemory.String(),
 	})
 	t.SetStyle(table.StyleColoredDark)
 	t.Render()
-
 }
 
 func getNodes(clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
-	nodes, err = clientset.CoreV1().Nodes().List(metav1.ListOptions{})
+	nodes, err = clientset.CoreV1().Nodes().List(
+		metav1.ListOptions{LabelSelector: viper.GetString("selector"), FieldSelector: viper.GetString("field-selector")},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -261,25 +285,22 @@ func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList
 }
 
 func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList, node *v1.Node) *NodeStats {
-
 	reqs, limits := getPodsTotalRequestsAndLimits(nodeNonTerminatedPodsList)
 
 	cpuReqs, cpuLimits, memoryReqs, memoryLimits :=
 		reqs[v1.ResourceCPU], limits[v1.ResourceCPU], reqs[v1.ResourceMemory], limits[v1.ResourceMemory]
 
 	ns := &NodeStats{
-		allocatedCPUrequests:    toCores(cpuReqs.MilliValue()),
-		allocatedCPULimits:      toCores(cpuLimits.MilliValue()),
-		allocatedMemoryRequests: memoryReqs.ScaledValue(6),
-		allocatedMemoryLimits:   memoryLimits.ScaledValue(6),
+		allocatedCPUrequests:    cpuReqs,
+		allocatedCPULimits:      cpuLimits,
+		allocatedMemoryRequests: memoryReqs,
+		allocatedMemoryLimits:   memoryLimits,
 	}
 	return ns
-
 }
 
 // Based on: https://github.com/kubernetes/kubernetes/pkg/kubectl/describe/versioned/describe.go#L3223
-func getPodsTotalRequestsAndLimits(podList *v1.PodList) (
-	reqs map[v1.ResourceName]resource.Quantity, limits map[v1.ResourceName]resource.Quantity) {
+func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs, limits map[v1.ResourceName]resource.Quantity) {
 	reqs, limits = map[v1.ResourceName]resource.Quantity{}, map[v1.ResourceName]resource.Quantity{}
 	for _, pod := range podList.Items {
 		podReqs, podLimits := resourcehelper.PodRequestsAndLimits(&pod)
@@ -306,16 +327,19 @@ func getPodsTotalRequestsAndLimits(podList *v1.PodList) (
 // reimplementation of https://github.com/kubernetes/kubernetes/blob/master/pkg/kubectl/cmd/top/top_node.go#L159
 func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *GlanceConfig) (
 	[]metrics.NodeMetrics, map[string]v1.ResourceList, error) {
-
 	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	labelSelector := labels.Everything()
+	ls := viper.GetString("selector")
+	fs := viper.GetString("field-selector")
 
-	if gc.resourceFlags.LabelSelector != nil && len(*gc.resourceFlags.LabelSelector) > 0 {
-		labelSelector, err = labels.Parse(*gc.resourceFlags.LabelSelector)
+	log.Printf(" %+v ", ls+" "+fs)
+
+	if fs != "" || ls != "" {
+		labelSelector, err = labels.Parse(ls + " " + fs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -328,7 +352,8 @@ func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *Gl
 	metricsAPIAvailable := top.SupportedMetricsAPIVersionAvailable(apiGroups)
 
 	heapsterClient := metricsutil.NewHeapsterMetricsClient(clientset.CoreV1(),
-		metricsutil.DefaultHeapsterNamespace, metricsutil.DefaultHeapsterScheme, metricsutil.DefaultHeapsterService, metricsutil.DefaultHeapsterPort)
+		metricsutil.DefaultHeapsterNamespace, metricsutil.DefaultHeapsterScheme,
+		metricsutil.DefaultHeapsterService, metricsutil.DefaultHeapsterPort)
 
 	//nolint staticcheck
 	metrics := &metricsapi.NodeMetricsList{}
@@ -396,8 +421,4 @@ func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, reso
 		return nil, err
 	}
 	return metrics, nil
-}
-
-func toCores(in int64) float64 {
-	return (float64(in) * float64(0.001))
 }

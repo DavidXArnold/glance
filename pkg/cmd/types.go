@@ -13,35 +13,37 @@ limitations under the License.
 
 package cmd
 
+import "k8s.io/apimachinery/pkg/api/resource"
+
 //nolint unused
 // NodeStats is an object to hold relevent node stats
 type NodeStats struct {
 	status                  string
 	providerID              string
-	allocatableCPU          float64
-	allocatableMemory       int64
-	capacityCPU             float64
-	capacityMemory          int64
-	allocatedCPUrequests    float64
-	allocatedCPULimits      float64
-	allocatedMemoryRequests int64
-	allocatedMemoryLimits   int64
-	usageCPU                string
-	usageMemory             string
+	allocatableCPU          *resource.Quantity
+	allocatableMemory       *resource.Quantity
+	capacityCPU             *resource.Quantity
+	capacityMemory          *resource.Quantity
+	allocatedCPUrequests    resource.Quantity
+	allocatedCPULimits      resource.Quantity
+	allocatedMemoryRequests resource.Quantity
+	allocatedMemoryLimits   resource.Quantity
+	usageCPU                *resource.Quantity
+	usageMemory             *resource.Quantity
 }
 
 type nodeMap map[string]*NodeStats
 
 //nolint unused
 type counter struct {
-	totalAllocatableCPU          float64
-	totalAllocatableMemory       int64
-	totalCapacityCPU             float64
-	totalCapacityMemory          int64
-	totalAllocatedCPUrequests    float64
-	totalAllocatedCPULimits      float64
-	totalAllocatedMemoryRequests int64
-	totalAllocatedMemoryLimits   int64
-	totalUsageCPU                float64
-	totalUsageMemory             int64
+	totalAllocatableCPU          *resource.Quantity
+	totalAllocatableMemory       *resource.Quantity
+	totalCapacityCPU             *resource.Quantity
+	totalCapacityMemory          *resource.Quantity
+	totalAllocatedCPUrequests    *resource.Quantity
+	totalAllocatedCPULimits      *resource.Quantity
+	totalAllocatedMemoryRequests *resource.Quantity
+	totalAllocatedMemoryLimits   *resource.Quantity
+	totalUsageCPU                *resource.Quantity
+	totalUsageMemory             *resource.Quantity
 }

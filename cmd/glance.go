@@ -14,17 +14,13 @@ limitations under the License.
 package main
 
 import (
-	"os"
-
 	log "github.com/sirupsen/logrus"
 
 	"github.com/davidxarnold/glance/pkg/cmd"
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
 func main() {
-
-	root := cmd.NewGlanceCmd(genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr})
+	root := cmd.NewGlanceCmd()
 	if err := root.Execute(); err != nil {
 		log.Fatalf("Error encountered while glancing: %v", err)
 	}
