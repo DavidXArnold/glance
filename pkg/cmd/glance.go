@@ -75,14 +75,12 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		log.Println("Using config file:", viper.ConfigFileUsed())
 	}
-
 }
 
 // GlanceOptions contains options and configurations needed by glance
 type GlanceConfig struct {
-	configFlags   *genericclioptions.ConfigFlags
-	resourceFlags *genericclioptions.ResourceBuilderFlags
-	restConfig    *rest.Config
+	configFlags *genericclioptions.ConfigFlags
+	restConfig  *rest.Config
 	genericclioptions.IOStreams
 }
 
@@ -119,7 +117,10 @@ func NewGlanceCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PreRun: func(cmd *cobra.Command, args []string) {
-			viper.BindPFlags(cmd.Flags())
+			err = viper.BindPFlags(cmd.Flags())
+			if err != nil {
+				log.Fatalf("unable to initialize glance: %v ", err)
+			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// create the clientset
@@ -137,25 +138,27 @@ func NewGlanceCmd() *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(
-		&fieldSelector, "field-selector", "", "Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
-	viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
+		&fieldSelector, "field-selector", "",
+		//nolint lll
+		"Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
+	_ = viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
 	cmd.PersistentFlags().StringVar(
-		&labelSelector, "selector", "", "Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
+		&labelSelector, "selector", "",
+		"Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
 
 	KubernetesConfigFlags.AddFlags(cmd.Flags())
 	cobra.OnInitialize(initConfig)
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
-	viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
-	viper.BindPFlags(cmd.Flags())
+	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
+	_ = viper.BindPFlags(cmd.Flags())
 
 	return cmd
 }
 
 // GlanceK8s displays cluster information for a given clientset
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
-
 	c := &counter{
 		totalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
 		totalAllocatableMemory:       resource.NewQuantity(0, resource.BinarySI),
@@ -183,50 +186,50 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		"Host": gc.restConfig.Host,
 	}).Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
 
-	for _, n := range nodes.Items {
+	for i := range nodes.Items {
+		nn := nodes.Items[i].Name
 		_, nc := nodeutil.GetNodeCondition(
-			&n.Status,
+			&nodes.Items[i].Status,
 			v1.NodeReady)
 
 		if nc.Type != v1.NodeReady && nc.Status != "True" {
-			nm[n.Name] = &NodeStats{
+			nm[nn] = &NodeStats{
 				status: "Not Ready",
 			}
 			continue
 		}
 
-		podList, err := getPods(k8sClient, n.Name)
+		podList, err := getPods(k8sClient, nn)
 		if err != nil {
 			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
 		}
 
-		nm[n.Name] = describeNodeResource(podList, &n)
+		nm[nn] = describeNodeResource(podList)
 
-		if n.Spec.ProviderID != "" {
-			nm[n.Name].providerID = n.Spec.ProviderID
+		if nodes.Items[i].Spec.ProviderID != "" {
+			nm[nn].providerID = nodes.Items[i].Spec.ProviderID
 		}
 
-		nm[n.Name].status = "Ready"
-		nm[n.Name].allocatableCPU = n.Status.Allocatable.Cpu()
-		nm[n.Name].allocatableMemory = n.Status.Allocatable.Memory()
+		nm[nn].allocatableCPU = nodes.Items[i].Status.Allocatable.Cpu()
+		nm[nn].allocatableMemory = nodes.Items[i].Status.Allocatable.Memory()
 
-		n.Status.Allocatable.Cpu().Add(*c.totalAllocatableCPU)
-		n.Status.Allocatable.Memory().Add(*c.totalAllocatableMemory)
-		c.totalAllocatedCPUrequests.Add(nm[n.Name].allocatedCPUrequests)
-		c.totalAllocatedCPULimits.Add(nm[n.Name].allocatedCPULimits)
-		c.totalAllocatedMemoryRequests.Add(nm[n.Name].allocatedMemoryRequests)
-		c.totalAllocatedMemoryLimits.Add(nm[n.Name].allocatedMemoryLimits)
+		c.totalAllocatableCPU.Add(*nm[nn].allocatableCPU)
+		c.totalAllocatableMemory.Add(*nm[nn].allocatableMemory)
+		c.totalAllocatedCPUrequests.Add(nm[nn].allocatedCPUrequests)
+		c.totalAllocatedCPULimits.Add(nm[nn].allocatedCPULimits)
+		c.totalAllocatedMemoryRequests.Add(nm[nn].allocatedMemoryRequests)
+		c.totalAllocatedMemoryLimits.Add(nm[nn].allocatedMemoryLimits)
 
-		nodeMetrics, _, err := getNodeUtilization(k8sClient, n.Name, gc)
+		nodeMetrics, _, err := getNodeUtilization(k8sClient, nn, gc)
 		if err != nil {
 			log.Fatalf("Unable to retrieve Node metrics: %v", err)
 		}
 
-		nm[n.Name].usageCPU = nodeMetrics[0].Usage.Cpu()
-		nm[n.Name].usageMemory = nodeMetrics[0].Usage.Memory()
+		nm[nn].usageCPU = nodeMetrics[0].Usage.Cpu()
+		nm[nn].usageMemory = nodeMetrics[0].Usage.Memory()
 
-		nodeMetrics[0].Usage.Cpu().Add(*c.totalUsageCPU)
-		nodeMetrics[0].Usage.Memory().Add(*c.totalUsageMemory)
+		c.totalUsageCPU.Add(*nm[nn].usageCPU)
+		c.totalUsageMemory.Add(*nm[nn].usageMemory)
 	}
 
 	render(&nm, c)
@@ -254,7 +257,7 @@ func render(nm *nodeMap, c *counter) {
 	t.AppendFooter(table.Row{
 		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory,
 		c.totalAllocatedCPUrequests, c.totalAllocatedCPULimits, c.totalAllocatedMemoryRequests,
-		c.totalAllocatedMemoryLimits, c.totalUsageCPU.String(), c.totalUsageMemory.String(),
+		c.totalAllocatedMemoryLimits, c.totalUsageCPU.AsDec().String(), c.totalUsageMemory.String(),
 	})
 	t.SetStyle(table.StyleColoredDark)
 	t.Render()
@@ -284,7 +287,7 @@ func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList
 	return nodeNonTerminatedPodsList, nil
 }
 
-func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList, node *v1.Node) *NodeStats {
+func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList) *NodeStats {
 	reqs, limits := getPodsTotalRequestsAndLimits(nodeNonTerminatedPodsList)
 
 	cpuReqs, cpuLimits, memoryReqs, memoryLimits :=
@@ -302,8 +305,8 @@ func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList, node *v1.Node) 
 // Based on: https://github.com/kubernetes/kubernetes/pkg/kubectl/describe/versioned/describe.go#L3223
 func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs, limits map[v1.ResourceName]resource.Quantity) {
 	reqs, limits = map[v1.ResourceName]resource.Quantity{}, map[v1.ResourceName]resource.Quantity{}
-	for _, pod := range podList.Items {
-		podReqs, podLimits := resourcehelper.PodRequestsAndLimits(&pod)
+	for i := range podList.Items {
+		podReqs, podLimits := resourcehelper.PodRequestsAndLimits(&podList.Items[i])
 		for podReqName, podReqValue := range podReqs {
 			if value, ok := reqs[podReqName]; !ok {
 				reqs[podReqName] = podReqValue.DeepCopy()
@@ -390,8 +393,8 @@ func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *Gl
 
 	allocatable := make(map[string]v1.ResourceList)
 
-	for _, n := range nodes {
-		allocatable[n.Name] = n.Status.Allocatable
+	for i := range nodes {
+		allocatable[nodes[i].Name] = nodes[i].Status.Allocatable
 	}
 
 	return metrics.Items, allocatable, nil

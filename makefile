@@ -1,5 +1,5 @@
 ARCH?=amd64
-GO_VERSION?=1.13
+GO_VERSION?=1.14
 GIT_VERSION := $(shell git describe --tags --always --abbrev=8 --dirty)
 PACKAGE := gitlab.com/davidxarnold/glance
 APPLICATION := kubectl-glance
@@ -20,7 +20,7 @@ test:
 
 lint:
 	# golangci-lint run
-	docker run --rm -t -v $(PWD):/go/src/$(PACKAGE) -w /go/src/$(PACKAGE) golangci/golangci-lint:v1.23 golangci-lint run -v --timeout=5m
+	docker run --rm -t -v $(PWD):/go/src/$(PACKAGE) -w /go/src/$(PACKAGE) golangci/golangci-lint:v1.23.8 golangci-lint run -v --timeout=5m
 
 fmt:
 	goimports -w `find . -type f -name '*.go'`
@@ -33,4 +33,12 @@ container:
 	--build-arg APPLICATION=$(APPLICATION) \
 	-f deploy/docker/Dockerfile -t $(APPLICATION):${VERSION} .
 
+download-deps:
+	@echo Download go.mod dependencies
+	@go mod download
+
+install-tools: download-deps
+	@echo Installing tools from tools/tools.go
+	@cat ./tools/tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
+	
 .PHONY: test version
