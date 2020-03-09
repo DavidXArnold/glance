@@ -1,3 +1,5 @@
+// +build tools
+
 /*
 Copyright 2020 David Arnold
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,17 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package tools
 
 import (
-	log "github.com/sirupsen/logrus"
-
-	"gitlab.com/davidxarnold/glance/pkg/cmd"
+	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
 )
-
-func main() {
-	root := cmd.NewGlanceCmd()
-	if err := root.Execute(); err != nil {
-		log.Fatalf("Error encountered while glancing: %v", err)
-	}
-}
