@@ -45,6 +45,8 @@ build-darwin:
     - mkdir -p $HOME/.config/git
     - echo "${BASH_REMATCH[1]/:\/\//://gitlab-ci-token:${GL_TOKEN}@}" > $HOME/.config/git/credentials
     - git config --global credential.helper store
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
   script:
     - make build
     - make archive
