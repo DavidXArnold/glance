@@ -11,10 +11,12 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 **kubectl-**
-/target
-/target/**
 /vendor
 vendor/**
+/target
+/target/**
+/archive
+/archive/**
 **/.DS_Store
 /cmd/debug.test
 **/debug.test

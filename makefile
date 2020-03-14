@@ -1,15 +1,16 @@
 ARCH?=amd64
 GO_VERSION?=1.14
-GIT_VERSION := $(shell git describe --tags --always --abbrev=8 --dirty)
+GIT_VERSION := $(shell git describe --tags --always --abbrev=8)
+RELEASE_VERSION := $(shell sed -nE 's/^var[[:space:]]Version[[:space:]]=[[:space:]]"([^"]+)".*/\1/p' version/version.go)
 PACKAGE := gitlab.com/davidxarnold/glance
-APPLICATION := kubectl-glance
+APPLICATION?=kubectl-glance
 NOW := $(shell date +'%s')
 VERSION := $(shell echo $(GIT_VERSION) | sed s/-dirty/-dirty-$(NOW)/)
 
-setup:
-	cd /tmp && go get golang.org/x/tools/cmd/goimports
-
 all: build lint
+
+archive:
+	mkdir -p ./archive/ && tar -zcvf ./archive/$(APPLICATION)-$(RELEASE_VERSION).tar.gz ./target/$(APPLICATION)
 
 build:
 	mkdir -p target
@@ -37,8 +38,16 @@ download-deps:
 	@echo Download go.mod dependencies
 	@go mod download
 
+formula:
+	sed -i  "s/\(sha256 \)\(.*\)/\1\"${ARCHIVE_SHA}\"/" Formula/glance.rb
+	sed -i  "s/\(version \)\(.*\)/\1\"${RELEASE_VERSION}\"/" Formula/glance.rb
+	sed -i  "s/\(kubectl-glance-\)\(.*\)/\${RELEASE_VERSION}.tar.gz?job=build-darwin\"/" Formula/glance.rb
+
 install-tools: download-deps
 	@echo Installing tools from tools/tools.go
 	@cat ./tools/tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
+
+release_version:
+	@echo $(RELEASE_VERSION)
 	
-.PHONY: test version
+.PHONY: test version build archive formula

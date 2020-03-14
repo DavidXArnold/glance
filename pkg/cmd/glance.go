@@ -256,8 +256,8 @@ func render(nm *nodeMap, c *counter) {
 
 	t.AppendFooter(table.Row{
 		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory,
-		c.totalAllocatedCPUrequests, c.totalAllocatedCPULimits, c.totalAllocatedMemoryRequests,
-		c.totalAllocatedMemoryLimits, c.totalUsageCPU.AsDec().String(), c.totalUsageMemory.String(),
+		c.totalAllocatedCPUrequests.AsDec(), c.totalAllocatedCPULimits.AsDec(), c.totalAllocatedMemoryRequests,
+		c.totalAllocatedMemoryLimits, c.totalUsageCPU.AsDec(), c.totalUsageMemory,
 	})
 	t.SetStyle(table.StyleColoredDark)
 	t.Render()

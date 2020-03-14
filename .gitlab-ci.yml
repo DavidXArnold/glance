@@ -1,0 +1,80 @@
+---
+default:
+  image: golang:1.14
+
+stages:
+  - lint
+  # - test
+  - build
+  - build-darwin
+  # - container
+
+# test:
+#   stage: test
+#   script:
+#     - make test
+
+lint:
+  stage: lint
+  image: docker:19
+  services:
+    - docker:19-dind
+  variables:
+    CONTAINER_REGISTRY: "registry.gitlab.com/davidxarnold"
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - apk add make
+    - make lint
+
+build:
+  stage: build
+  script:
+    - make build
+  artifacts:
+    paths:
+      - target/kubectl-glance
+  only:
+    - master
+
+build-darwin:
+  stage: build
+  variables:
+    GOOS: darwin
+  before_script:
+    - mkdir -p $HOME/.config/git
+    - echo "${BASH_REMATCH[1]/:\/\//://gitlab-ci-token:${GL_TOKEN}@}" > $HOME/.config/git/credentials
+    - git config --global credential.helper store
+  script:
+    - make build
+    - make archive
+    - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') make formula
+    - git commit -am "update formula"
+    - git push -o ci.skip
+  artifacts:
+    paths:
+    - "archive/kubectl-glance*"
+  only:
+    - master
+
+# container:
+#   stage: container
+#   image: docker:19
+#   services:
+#     - docker:19-dind
+#   variables:
+#     CONTAINER_REGISTRY: "registry.gitlab.com/davidxarnold"
+#     DOCKER_DRIVER: overlay2
+#     DOCKER_TLS_CERTDIR: "/certs"
+#   script:
+#     - apk add make git
+#     - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} registry.gitlab.com
+#     - make container
+#     - docker tag glance:${CI_COMMIT_SHORT_SHA} ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:${CI_COMMIT_SHORT_SHA}
+#     - docker push ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:${CI_COMMIT_SHORT_SHA}
+#     - if [[ "$CI_COMMIT_REF_NAME" == "master" ]]; then
+#         docker tag glance:${CI_COMMIT_SHORT_SHA} ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:latest;
+#         docker push ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:latest;
+#       else
+#         echo "Skipping creating latest tag. Not master branch";
+#       fi
