@@ -52,7 +52,7 @@ build-darwin:
     - make archive
     - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') make formula
     - git commit -am "update formula"
-    - git push -o ci.skip origin master
+    - git push -o ci.skip origin HEAD:master
   artifacts:
     paths:
     - "archive/kubectl-glance*"
