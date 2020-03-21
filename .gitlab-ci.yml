@@ -44,7 +44,7 @@ build-darwin:
   before_script:
     - mkdir -p $HOME/.config/git
     - echo "${BASH_REMATCH[1]/:\/\//://gitlab-ci-token:${GL_TOKEN}@}" > $HOME/.config/git/credentials
-    - git remote set-url --push origin "${CI_PUSH_REPO}"
+    - git remote set-url --push origin "${CI_REPOSITORY_URL}"
     - git config --global credential.helper store
     - git config --global user.email "${GITLAB_USER_EMAIL}"
     - git config --global user.name "${GITLAB_USER_NAME}"
