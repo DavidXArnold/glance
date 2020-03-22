@@ -50,7 +50,7 @@ build-darwin:
     - git checkout -b ci_processing
     - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') make formula
     - git commit -am "update formula"
-    - git push -o ci.skip http://gitlab-ci-token:${GL_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
+    - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
   artifacts:
     paths:
     - "archive/kubectl-glance*"
