@@ -42,10 +42,6 @@ build-darwin:
   variables:
     GOOS: darwin
   before_script:
-    - mkdir -p $HOME/.config/git
-    - echo "${BASH_REMATCH[1]/:\/\//://gitlab-ci-token:${GL_TOKEN}@}" > $HOME/.config/git/credentials
-    - git remote set-url --push origin "${CI_REPOSITORY_URL}"
-    - git config --global credential.helper store
     - git config --global user.email "${GITLAB_USER_EMAIL}"
     - git config --global user.name "${GITLAB_USER_NAME}"
   script:
@@ -54,7 +50,7 @@ build-darwin:
     - git checkout -b ci_processing
     - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') make formula
     - git commit -am "update formula"
-    - git push -o ci.skip "https://${GITLAB_USER_NAME}:${GL_TOKEN}@${CI_REPOSITORY_URL#*@}" "HEAD:${CI_COMMIT_BRANCH}"
+    - git push -o ci.skip http://gitlab-ci-token:${GL_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
   artifacts:
     paths:
     - "archive/kubectl-glance*"
