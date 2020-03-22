@@ -5,10 +5,13 @@ class glance < Formula
     sha256 "f443438ad4d94977d47a6c5724d540b20be128c586b0fa224ed8f4b9731be4ab"
     version "0.0.1"
     
-    bottle :unneeded
-  
     def install
-      bin.install "glance"
+      bin.install "davidxarnold/glance"
     end
+
+    test do
+      kubectl-glance --help
+    end
+  
   end
   
