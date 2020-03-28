@@ -6,6 +6,8 @@ PACKAGE := gitlab.com/davidxarnold/glance
 APPLICATION?=kubectl-glance
 NOW := $(shell date +'%s')
 VERSION := $(shell echo $(GIT_VERSION) | sed s/-dirty/-dirty-$(NOW)/)
+REF?=master
+URL?=\"https://${PACKAGE}/-/jobs/${REF}/artifacts/raw/archive/${APPLICATION}-${RELEASE_VERSION}.tar.gz?job=build-darwin\"
 
 all: build lint
 
@@ -39,9 +41,9 @@ download-deps:
 	@go mod download
 
 formula:
-	sed -i  "s/\(sha256 \)\(.*\)/\1\"${ARCHIVE_SHA}\"/" Formula/glance.rb
-	sed -i  "s/\(version \)\(.*\)/\1\"${RELEASE_VERSION}\"/" Formula/glance.rb
-	sed -i  "s/\(kubectl-glance-\)\(.*\)/\${RELEASE_VERSION}.tar.gz?job=build-darwin\"/" Formula/glance.rb
+	sed -i .bkp "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
+	sed -i .bkp "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
+	sed -i .bkp "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
 
 install-tools: download-deps
 	@echo Installing tools from tools/tools.go
