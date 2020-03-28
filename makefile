@@ -41,9 +41,9 @@ download-deps:
 	@go mod download
 
 formula:
-	sed -i .bkp "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
-	sed -i .bkp "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
-	sed -i .bkp "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
+	sed -i '.bkp' "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
+	sed -i '.bkp' "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
+	sed -i '.bkp' "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
 
 install-tools: download-deps
 	@echo Installing tools from tools/tools.go
