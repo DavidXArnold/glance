@@ -8,8 +8,16 @@ NOW := $(shell date +'%s')
 VERSION := $(shell echo $(GIT_VERSION) | sed s/-dirty/-dirty-$(NOW)/)
 REF?=master
 URL?=\"https://${PACKAGE}/-/jobs/${REF}/artifacts/raw/archive/${APPLICATION}-${RELEASE_VERSION}.tar.gz?job=build-darwin\"
+SED 				:=
+UNAME_S := $(shell uname -s)
+	ifeq ($(UNAME_S),Linux)
+		SED += sed -i
+	endif
+	ifeq ($(UNAME_S),Darwin)
+		SED += sed -i .bkp
+	endif
 
-all: build lint
+all: check build 
 
 archive:
 	mkdir -p ./archive/ && tar -zcvf ./archive/$(APPLICATION)-$(RELEASE_VERSION).tar.gz ./target/$(APPLICATION)
@@ -41,9 +49,9 @@ download-deps:
 	@go mod download
 
 formula:
-	sed -i bkp "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
-	sed -i bkp "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
-	sed -i bkp "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
+	${SED} "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
+	${SED} "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
+	${SED} "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
 
 install-tools: download-deps
 	@echo Installing tools from tools/tools.go
