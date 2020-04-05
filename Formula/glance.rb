@@ -1,4 +1,4 @@
-class glance < Formula
+class Glance < Formula
     desc "A kubectl plugin to view cluster resource allocation and usage."
     homepage "https://github.com/davidxarnold/glance"
     url "https://gitlab.com/davidxarnold/glance/-/jobs/489448124/artifacts/raw/archive/kubectl-glance-0.0.1.tar.gz?job=build-darwin"
@@ -6,11 +6,11 @@ class glance < Formula
     version "0.0.1"
     
     def install
-      bin.install "davidxarnold/glance"
+      bin.install "kubectl-glance"
     end
 
     test do
-      kubectl-glance --help
+      "kubectl-glance --help"
     end
   
   end
