@@ -19,7 +19,7 @@ On macOS, plugin can be installed via [Homebrew](https://brew.sh):
 
 ```shell
 brew tap davidxarnold/glance
-brew install kubectl-glance
+brew install glance
 ```
 
 
