@@ -29,8 +29,15 @@ lint:
 
 build:
   stage: build
+  before_script:
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
   script:
     - make build
+    - make archive
+    - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') REF=${CI_JOB_ID} make krew-plugin
+    - git commit -am "update krew plugin"
+    - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
   artifacts:
     paths:
       - target/kubectl-glance
@@ -57,6 +64,17 @@ build-darwin:
   only:
     - master
 
+tag:
+  stage: tag
+  before_script:
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
+  script:
+    - git checkout -b tag-release
+    - make tag-release
+    - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
+  only:
+    - master
 # container:
 #   stage: container
 #   image: docker:19
