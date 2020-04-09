@@ -18,8 +18,7 @@ Utility to quickly view Kubernetes cluster resources.
 On macOS, plugin can be installed via [Homebrew](https://brew.sh):
 
 ```shell
-brew tap davidxarnold/glance
-brew install glance
+brew install davidxarnold/glance https://gituhb.com/davidxarnold/glance
 ```
 
 

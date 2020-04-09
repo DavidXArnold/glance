@@ -241,23 +241,21 @@ func render(nm *nodeMap, c *counter) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{
-		"Node Name", "Status", "ProviderID", "Allocatable\nCPU", "Allocatable\nMEM (Mi)",
-		"Allocated\nCPU Req", "Allocated\nCPU Lim", "Allocated\nMEM Req", "Allocated\nMEM Lim", "Usage\nCPU", "Usage\nMem",
+		"Node Name", "Status", "ProviderID", "Allocated\nCPU Req", "Allocated\nCPU Lim",
+		"Allocated\nMEM Req", "Allocated\nMEM Lim", "Usage\nCPU", "Usage\nMem", "Available\nCPU", "Available\nMEM",
 	})
 
 	for k, v := range *nm {
 		t.AppendRow([]interface{}{k, v.status, v.providerID,
-			v.allocatableCPU.AsDec().String(), v.allocatableMemory.String(),
 			v.allocatedCPUrequests.AsDec().String(), v.allocatedCPULimits.AsDec().String(),
 			v.allocatedMemoryRequests.String(), v.allocatedMemoryLimits.String(),
-			v.usageCPU.AsDec().String(),
-			v.usageMemory.String()})
+			v.usageCPU.AsDec().String(), v.usageMemory.String(), v.allocatableCPU.AsDec().String(),
+			v.allocatableMemory.String()})
 	}
 
 	t.AppendFooter(table.Row{
-		"Totals", "", "", c.totalAllocatableCPU, c.totalAllocatableMemory,
-		c.totalAllocatedCPUrequests.AsDec(), c.totalAllocatedCPULimits.AsDec(), c.totalAllocatedMemoryRequests,
-		c.totalAllocatedMemoryLimits, c.totalUsageCPU.AsDec(), c.totalUsageMemory,
+		"Totals", "", "", c.totalAllocatedCPUrequests.AsDec(), c.totalAllocatedCPULimits.AsDec(), c.totalAllocatedMemoryRequests,
+		c.totalAllocatedMemoryLimits, c.totalUsageCPU.AsDec(), c.totalUsageMemory, c.totalAllocatableCPU, c.totalAllocatableMemory,
 	})
 
 	t.Render()
