@@ -7,7 +7,7 @@ stages:
   # - test
   - build
   - build-darwin
-  # - container
+  - tag
 
 # test:
 #   stage: test
@@ -35,6 +35,7 @@ build:
   script:
     - make build
     - make archive
+    - git checkout -b ci_processing_
     - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') REF=${CI_JOB_ID} make krew-plugin
     - git commit -am "update krew plugin"
     - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
