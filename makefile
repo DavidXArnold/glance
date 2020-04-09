@@ -57,7 +57,15 @@ install-tools: download-deps
 	@echo Installing tools from tools/tools.go
 	@cat ./tools/tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
 
+krew-plugin:
+	${SED} "s#\(sha256: \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" plugins/krew/glance.yaml
+	${SED} "s#\(version: \)\(.*\)#\1\"${RELEASE_VERSION}\"#" plugins/krew/glance.yaml
+	${SED} "s#\(uri: \)\(.*\)#\1${URL}#" plugins/krew/glance.yaml
+
 release_version:
 	@echo $(RELEASE_VERSION)
+
+tag-release:
+	git tag v$(RELEASE_VERSION)
 	
 .PHONY: test version build archive formula
