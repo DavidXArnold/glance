@@ -73,6 +73,7 @@ tag:
     - git config --global user.email "${GITLAB_USER_EMAIL}"
     - git config --global user.name "${GITLAB_USER_NAME}"
   script:
+    - git pull
     - git checkout -b tag-release
     - make tag-release
     - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
