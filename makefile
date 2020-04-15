@@ -7,7 +7,8 @@ APPLICATION?=kubectl-glance
 NOW := $(shell date +'%s')
 VERSION := $(shell echo $(GIT_VERSION) | sed s/-dirty/-dirty-$(NOW)/)
 REF?=master
-URL?=\"https://${PACKAGE}/-/jobs/${REF}/artifacts/raw/archive/${APPLICATION}-${RELEASE_VERSION}.tar.gz?job=build-darwin\"
+DARWIN_URL?=\"https://${PACKAGE}/-/jobs/${REF}/artifacts/raw/archive/${APPLICATION}-${RELEASE_VERSION}.tar.gz?job=build-darwin\"
+LINUX_URL?=\"https://${PACKAGE}/-/jobs/${REF}/artifacts/raw/archive/${APPLICATION}-${RELEASE_VERSION}.tar.gz?job=build\"
 SED 				:=
 UNAME_S := $(shell uname -s)
 	ifeq ($(UNAME_S),Linux)
@@ -51,7 +52,7 @@ download-deps:
 formula:
 	${SED} "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
 	${SED} "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
-	${SED} "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
+	${SED} "s#\(url \)\(.*\)#\1${DARWIN_URL}#" Formula/glance.rb
 
 install-tools: download-deps
 	@echo Installing tools from tools/tools.go
@@ -60,7 +61,8 @@ install-tools: download-deps
 krew-plugin:
 	${SED} "s#\(sha256: \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" plugins/krew/glance.yaml
 	${SED} "s#\(version: \)\(.*\)#\1\"${RELEASE_VERSION}\"#" plugins/krew/glance.yaml
-	${SED} "s#\(uri: \)\(.*\)#\1${URL}#" plugins/krew/glance.yaml
+	${SED} "12s#\(uri: \)\(.*\)#\1${DARWIN_URL}#" plugins/krew/glance.yaml
+	${SED} "19s#\(uri: \)\(.*\)#\1${LINUX_URL}#" plugins/krew/glance.yaml
 
 release_version:
 	@echo $(RELEASE_VERSION)
