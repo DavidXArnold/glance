@@ -13,37 +13,55 @@ limitations under the License.
 
 package cmd
 
-import "k8s.io/apimachinery/pkg/api/resource"
+import (
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/rest"
+)
+
+// GlanceOptions contains options and configurations needed by glance
+type GlanceConfig struct {
+	configFlags *genericclioptions.ConfigFlags
+	restConfig  *rest.Config
+	genericclioptions.IOStreams
+}
 
 //nolint unused
 // NodeStats is an object to hold relevent node stats
 type NodeStats struct {
-	status                  string
-	providerID              string
-	allocatableCPU          *resource.Quantity
-	allocatableMemory       *resource.Quantity
-	capacityCPU             *resource.Quantity
-	capacityMemory          *resource.Quantity
-	allocatedCPUrequests    resource.Quantity
-	allocatedCPULimits      resource.Quantity
-	allocatedMemoryRequests resource.Quantity
-	allocatedMemoryLimits   resource.Quantity
-	usageCPU                *resource.Quantity
-	usageMemory             *resource.Quantity
+	Status                  string             `json:",omitempty"`
+	ProviderID              string             `json:",omitempty"`
+	AllocatableCPU          *resource.Quantity `json:",omitempty"`
+	AllocatableMemory       *resource.Quantity `json:",omitempty"`
+	CapacityCPU             *resource.Quantity `json:",omitempty"`
+	CapacityMemory          *resource.Quantity `json:",omitempty"`
+	AllocatedCPUrequests    resource.Quantity  `json:",omitempty"`
+	AllocatedCPULimits      resource.Quantity  `json:",omitempty"`
+	AllocatedMemoryRequests resource.Quantity  `json:",omitempty"`
+	AllocatedMemoryLimits   resource.Quantity  `json:",omitempty"`
+	UsageCPU                *resource.Quantity `json:",omitempty"`
+	UsageMemory             *resource.Quantity `json:",omitempty"`
 }
 
-type nodeMap map[string]*NodeStats
+type NodeMap map[string]*NodeStats
 
 //nolint unused
-type counter struct {
-	totalAllocatableCPU          *resource.Quantity
-	totalAllocatableMemory       *resource.Quantity
-	totalCapacityCPU             *resource.Quantity
-	totalCapacityMemory          *resource.Quantity
-	totalAllocatedCPUrequests    *resource.Quantity
-	totalAllocatedCPULimits      *resource.Quantity
-	totalAllocatedMemoryRequests *resource.Quantity
-	totalAllocatedMemoryLimits   *resource.Quantity
-	totalUsageCPU                *resource.Quantity
-	totalUsageMemory             *resource.Quantity
+//Totals is an object to hold totals
+type Totals struct {
+	TotalAllocatableCPU          *resource.Quantity `json:",omitempty"`
+	TotalAllocatableMemory       *resource.Quantity `json:",omitempty"`
+	TotalCapacityCPU             *resource.Quantity `json:",omitempty"`
+	TotalCapacityMemory          *resource.Quantity `json:",omitempty"`
+	TotalAllocatedCPUrequests    *resource.Quantity `json:",omitempty"`
+	TotalAllocatedCPULimits      *resource.Quantity `json:",omitempty"`
+	TotalAllocatedMemoryRequests *resource.Quantity `json:",omitempty"`
+	TotalAllocatedMemoryLimits   *resource.Quantity `json:",omitempty"`
+	TotalUsageCPU                *resource.Quantity `json:",omitempty"`
+	TotalUsageMemory             *resource.Quantity `json:",omitempty"`
+}
+
+// Glance is an object that holds nodemaps and totals
+type Glance struct {
+	Nodes  NodeMap
+	Totals Totals
 }
