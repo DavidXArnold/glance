@@ -14,6 +14,7 @@ limitations under the License.
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -22,13 +23,13 @@ import (
 	"github.com/jedib0t/go-pretty/table"
 	"github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
+	"gitlab.com/davidxarnold/glance/pkg/util"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/kubectl/pkg/cmd/top"
 	"k8s.io/kubectl/pkg/metricsutil"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
@@ -77,13 +78,6 @@ func initConfig() {
 	}
 }
 
-// GlanceOptions contains options and configurations needed by glance
-type GlanceConfig struct {
-	configFlags *genericclioptions.ConfigFlags
-	restConfig  *rest.Config
-	genericclioptions.IOStreams
-}
-
 // NewGlanceConfig provides an instance of GlanceConfig with default values
 func NewGlanceConfig() (gc *GlanceConfig, err error) {
 	cf := genericclioptions.NewConfigFlags(true)
@@ -100,8 +94,11 @@ func NewGlanceConfig() (gc *GlanceConfig, err error) {
 
 // NewGlanceCmd provides a cobra command
 func NewGlanceCmd() *cobra.Command {
-	var labelSelector string
-	var fieldSelector string
+	var (
+		labelSelector string
+		fieldSelector string
+		output        string
+	)
 
 	KubernetesConfigFlags = genericclioptions.NewConfigFlags(false)
 
@@ -121,6 +118,9 @@ func NewGlanceCmd() *cobra.Command {
 			if err != nil {
 				log.Fatalf("unable to initialize glance: %v ", err)
 			}
+		},
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return util.SetupLogger()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// create the clientset
@@ -145,6 +145,9 @@ func NewGlanceCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(
 		&labelSelector, "selector", "",
 		"Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
+	cmd.PersistentFlags().StringVarP(
+		&output, "output", "o", "txt",
+		"-o, --output='': Output format. One of: txt|json")
 
 	KubernetesConfigFlags.AddFlags(cmd.Flags())
 	cobra.OnInitialize(initConfig)
@@ -152,6 +155,7 @@ func NewGlanceCmd() *cobra.Command {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
 	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
+	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
 	_ = viper.BindPFlags(cmd.Flags())
 
 	return cmd
@@ -159,20 +163,20 @@ func NewGlanceCmd() *cobra.Command {
 
 // GlanceK8s displays cluster information for a given clientset
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
-	c := &counter{
-		totalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
-		totalAllocatableMemory:       resource.NewQuantity(0, resource.BinarySI),
-		totalCapacityCPU:             resource.NewMilliQuantity(0, resource.DecimalSI),
-		totalCapacityMemory:          resource.NewQuantity(0, resource.BinarySI),
-		totalAllocatedCPUrequests:    resource.NewMilliQuantity(0, resource.DecimalSI),
-		totalAllocatedCPULimits:      resource.NewMilliQuantity(0, resource.DecimalSI),
-		totalAllocatedMemoryRequests: resource.NewQuantity(0, resource.BinarySI),
-		totalAllocatedMemoryLimits:   resource.NewQuantity(0, resource.BinarySI),
-		totalUsageCPU:                resource.NewMilliQuantity(0, resource.DecimalSI),
-		totalUsageMemory:             resource.NewQuantity(0, resource.BinarySI),
+	c := &Totals{
+		TotalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
+		TotalAllocatableMemory:       resource.NewQuantity(0, resource.BinarySI),
+		TotalCapacityCPU:             resource.NewMilliQuantity(0, resource.DecimalSI),
+		TotalCapacityMemory:          resource.NewQuantity(0, resource.BinarySI),
+		TotalAllocatedCPUrequests:    resource.NewMilliQuantity(0, resource.DecimalSI),
+		TotalAllocatedCPULimits:      resource.NewMilliQuantity(0, resource.DecimalSI),
+		TotalAllocatedMemoryRequests: resource.NewQuantity(0, resource.BinarySI),
+		TotalAllocatedMemoryLimits:   resource.NewQuantity(0, resource.BinarySI),
+		TotalUsageCPU:                resource.NewMilliQuantity(0, resource.DecimalSI),
+		TotalUsageMemory:             resource.NewQuantity(0, resource.BinarySI),
 	}
 
-	nm := make(nodeMap)
+	nm := make(NodeMap)
 	nodes, err := getNodes(k8sClient)
 	if err != nil {
 		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
@@ -194,7 +198,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 		if nc.Type != v1.NodeReady && nc.Status != "True" {
 			nm[nn] = &NodeStats{
-				status: "Not Ready",
+				Status: "Not Ready",
 			}
 			continue
 		}
@@ -207,29 +211,29 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		nm[nn] = describeNodeResource(podList)
 
 		if nodes.Items[i].Spec.ProviderID != "" {
-			nm[nn].providerID = nodes.Items[i].Spec.ProviderID
+			nm[nn].ProviderID = nodes.Items[i].Spec.ProviderID
 		}
 
-		nm[nn].allocatableCPU = nodes.Items[i].Status.Allocatable.Cpu()
-		nm[nn].allocatableMemory = nodes.Items[i].Status.Allocatable.Memory()
+		nm[nn].AllocatableCPU = nodes.Items[i].Status.Allocatable.Cpu()
+		nm[nn].AllocatableMemory = nodes.Items[i].Status.Allocatable.Memory()
 
-		c.totalAllocatableCPU.Add(*nm[nn].allocatableCPU)
-		c.totalAllocatableMemory.Add(*nm[nn].allocatableMemory)
-		c.totalAllocatedCPUrequests.Add(nm[nn].allocatedCPUrequests)
-		c.totalAllocatedCPULimits.Add(nm[nn].allocatedCPULimits)
-		c.totalAllocatedMemoryRequests.Add(nm[nn].allocatedMemoryRequests)
-		c.totalAllocatedMemoryLimits.Add(nm[nn].allocatedMemoryLimits)
+		c.TotalAllocatableCPU.Add(*nm[nn].AllocatableCPU)
+		c.TotalAllocatableMemory.Add(*nm[nn].AllocatableMemory)
+		c.TotalAllocatedCPUrequests.Add(nm[nn].AllocatedCPUrequests)
+		c.TotalAllocatedCPULimits.Add(nm[nn].AllocatedCPULimits)
+		c.TotalAllocatedMemoryRequests.Add(nm[nn].AllocatedMemoryRequests)
+		c.TotalAllocatedMemoryLimits.Add(nm[nn].AllocatedMemoryLimits)
 
 		nodeMetrics, _, err := getNodeUtilization(k8sClient, nn, gc)
 		if err != nil {
 			log.Fatalf("Unable to retrieve Node metrics: %v", err)
 		}
 
-		nm[nn].usageCPU = nodeMetrics[0].Usage.Cpu()
-		nm[nn].usageMemory = nodeMetrics[0].Usage.Memory()
+		nm[nn].UsageCPU = nodeMetrics[0].Usage.Cpu()
+		nm[nn].UsageMemory = nodeMetrics[0].Usage.Memory()
 
-		c.totalUsageCPU.Add(*nm[nn].usageCPU)
-		c.totalUsageMemory.Add(*nm[nn].usageMemory)
+		c.TotalUsageCPU.Add(*nm[nn].UsageCPU)
+		c.TotalUsageMemory.Add(*nm[nn].UsageMemory)
 	}
 
 	render(&nm, c)
@@ -237,7 +241,21 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	return nil
 }
 
-func render(nm *nodeMap, c *counter) {
+func render(nm *NodeMap, c *Totals) {
+	if viper.GetString("output") == "json" {
+		o := &Glance{
+			*nm,
+			*c,
+		}
+		g, err := json.MarshalIndent(o, "", "\t")
+		if err != nil {
+			log.Error(err)
+		}
+		fmt.Println(string(g))
+
+		os.Exit(0)
+	}
+
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{
@@ -246,16 +264,16 @@ func render(nm *nodeMap, c *counter) {
 	})
 
 	for k, v := range *nm {
-		t.AppendRow([]interface{}{k, v.status, v.providerID,
-			v.allocatedCPUrequests.AsDec().String(), v.allocatedCPULimits.AsDec().String(),
-			v.allocatedMemoryRequests.String(), v.allocatedMemoryLimits.String(),
-			v.usageCPU.AsDec().String(), v.usageMemory.String(), v.allocatableCPU.AsDec().String(),
-			v.allocatableMemory.String()})
+		t.AppendRow([]interface{}{k, v.Status, v.ProviderID,
+			v.AllocatedCPUrequests.AsDec().String(), v.AllocatedCPULimits.AsDec().String(),
+			v.AllocatedMemoryRequests.String(), v.AllocatedMemoryLimits.String(),
+			v.UsageCPU.AsDec().String(), v.UsageMemory.String(), v.AllocatableCPU.AsDec().String(),
+			v.AllocatableMemory.String()})
 	}
 
 	t.AppendFooter(table.Row{
-		"Totals", "", "", c.totalAllocatedCPUrequests.AsDec(), c.totalAllocatedCPULimits.AsDec(), c.totalAllocatedMemoryRequests,
-		c.totalAllocatedMemoryLimits, c.totalUsageCPU.AsDec(), c.totalUsageMemory, c.totalAllocatableCPU, c.totalAllocatableMemory,
+		"Totals", "", "", c.TotalAllocatedCPUrequests.AsDec(), c.TotalAllocatedCPULimits.AsDec(), c.TotalAllocatedMemoryRequests,
+		c.TotalAllocatedMemoryLimits, c.TotalUsageCPU.AsDec(), c.TotalUsageMemory, c.TotalAllocatableCPU, c.TotalAllocatableMemory,
 	})
 
 	t.Render()
@@ -292,10 +310,10 @@ func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList) *NodeStats {
 		reqs[v1.ResourceCPU], limits[v1.ResourceCPU], reqs[v1.ResourceMemory], limits[v1.ResourceMemory]
 
 	ns := &NodeStats{
-		allocatedCPUrequests:    cpuReqs,
-		allocatedCPULimits:      cpuLimits,
-		allocatedMemoryRequests: memoryReqs,
-		allocatedMemoryLimits:   memoryLimits,
+		AllocatedCPUrequests:    cpuReqs,
+		AllocatedCPULimits:      cpuLimits,
+		AllocatedMemoryRequests: memoryReqs,
+		AllocatedMemoryLimits:   memoryLimits,
 	}
 	return ns
 }
