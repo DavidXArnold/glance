@@ -243,21 +243,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		c.TotalUsageMemory.Add(*nm[nn].UsageMemory)
 
 		if viper.GetBool("cloud-info") {
-			if nodes.Items[i].Spec.ProviderID != "" {
-				nm[nn].ProviderID = nodes.Items[i].Spec.ProviderID
-				cp, id := util.ParseProviderID(nm[nn].ProviderID)
-				switch cp {
-				case "aws":
-					nm[nn].CloudInfo.aws = getAWSNodeInfo(id[1])
-				case "gce":
-					log.Info("gce not yet implemented")
-				case "azure":
-					log.Info("azure not yet implemented")
-				default:
-					log.Warnf("Unknown cloud provider: %v", cp)
-				}
-			}
-			log.Warnf("unable to get cloud-info for node: %v providerID not set", nn)
+			getCloudInfo(&nodes.Items[i], nm[nn])
 		}
 	}
 
@@ -465,4 +451,22 @@ func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, reso
 		return nil, err
 	}
 	return metrics, nil
+}
+
+func getCloudInfo(n *v1.Node, ns *NodeStats) {
+	if n.Spec.ProviderID != "" {
+		ns.ProviderID = n.Spec.ProviderID
+		cp, id := util.ParseProviderID(ns.ProviderID)
+		switch cp {
+		case "aws":
+			ns.CloudInfo.Aws = getAWSNodeInfo(id[1])
+		case "gce":
+			log.Info("gce not yet implemented")
+		case "azure":
+			log.Info("azure not yet implemented")
+		default:
+			log.Warnf("Unknown cloud provider: %v", cp)
+		}
+	}
+	log.Warnf("unable to get cloud-info for node: %v providerID not set", n.GetName())
 }

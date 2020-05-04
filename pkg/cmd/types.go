@@ -50,9 +50,11 @@ type NodeStats struct {
 type NodeMap map[string]*NodeStats
 
 type cloudInfo struct {
-	aws   *ec2.DescribeInstancesOutput `json:",omitempty"`
-	gce   map[string]string            `json:",omitempty"`
-	azure map[string]string            `json:",omitempty"`
+	Aws *ec2.DescribeInstancesOutput `json:",omitempty"`
+	//nolint unused
+	Gce map[string]string `json:",omitempty"`
+	//nolint unused
+	Azure map[string]string `json:",omitempty"`
 }
 
 //nolint unused

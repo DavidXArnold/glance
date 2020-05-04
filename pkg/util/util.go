@@ -39,17 +39,7 @@ func SetupLogger() (err error) {
 }
 
 // ParseProviderID returns the cloud provider and associated info
-func ParseProviderID(pi string) (string, []string) {
+func ParseProviderID(pi string) (cp string, id []string) {
 	s := strings.Split(pi, ":")
-	// cp = s[0]
 	return s[0], strings.Split(strings.TrimPrefix(s[1], "//"), "/")
-	// switch cp {
-	// case "aws":
-	// 	return cp, strings.Split(strings.TrimPrefix(s[1], "//"), "/"), nil
-	// case "gce":
-	// 	return cp, strings.Split(strings.TrimPrefix(s[1], "//"), "/"), nil
-	// case "azure":
-	// 	return cp, strings.Split(strings.TrimPrefix(s[1], "//"), "/"), nil
-	// }
-	// return cp, "", fmt.Errorf("unknown provider ID: %v", cp)
 }
