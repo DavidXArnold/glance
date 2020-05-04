@@ -3,6 +3,7 @@ module gitlab.com/davidxarnold/glance
 go 1.14
 
 require (
+	github.com/aws/aws-sdk-go-v2 v0.22.0
 	github.com/golangci/golangci-lint v1.18.0
 	github.com/jedib0t/go-pretty v4.3.0+incompatible
 	github.com/mitchellh/go-homedir v1.1.0

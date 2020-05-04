@@ -14,6 +14,8 @@ limitations under the License.
 package cmd
 
 import (
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/rest"
@@ -31,6 +33,8 @@ type GlanceConfig struct {
 type NodeStats struct {
 	Status                  string             `json:",omitempty"`
 	ProviderID              string             `json:",omitempty"`
+	NodeInfo                v1.NodeSystemInfo  `json:",omitempty"`
+	CloudInfo               cloudInfo          `json:",omitempty"`
 	AllocatableCPU          *resource.Quantity `json:",omitempty"`
 	AllocatableMemory       *resource.Quantity `json:",omitempty"`
 	CapacityCPU             *resource.Quantity `json:",omitempty"`
@@ -44,6 +48,12 @@ type NodeStats struct {
 }
 
 type NodeMap map[string]*NodeStats
+
+type cloudInfo struct {
+	aws   *ec2.DescribeInstancesOutput `json:",omitempty"`
+	gce   map[string]string            `json:",omitempty"`
+	azure map[string]string            `json:",omitempty"`
+}
 
 //nolint unused
 //Totals is an object to hold totals
