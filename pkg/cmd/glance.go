@@ -284,12 +284,12 @@ func render(nm *NodeMap, c *Totals) {
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.AppendHeader(table.Row{
-		"Node Name", "Status", "ProviderID", "Allocated\nCPU Req", "Allocated\nCPU Lim",
+		"Node Name", "Kubelet Version", "ProviderID", "Allocated\nCPU Req", "Allocated\nCPU Lim",
 		"Allocated\nMEM Req", "Allocated\nMEM Lim", "Usage\nCPU", "Usage\nMem", "Available\nCPU", "Available\nMEM",
 	})
 
 	for k, v := range *nm {
-		t.AppendRow([]interface{}{k, v.Status, v.ProviderID,
+		t.AppendRow([]interface{}{k, v.NodeInfo.KubeletVersion, v.ProviderID,
 			v.AllocatedCPUrequests.AsDec().String(), v.AllocatedCPULimits.AsDec().String(),
 			v.AllocatedMemoryRequests.String(), v.AllocatedMemoryLimits.String(),
 			v.UsageCPU.AsDec().String(), v.UsageMemory.String(), v.AllocatableCPU.AsDec().String(),
