@@ -3,6 +3,7 @@ module gitlab.com/davidxarnold/glance
 go 1.14
 
 require (
+	cloud.google.com/go v0.38.0
 	github.com/aws/aws-sdk-go-v2 v0.22.0
 	github.com/golangci/golangci-lint v1.18.0
 	github.com/jedib0t/go-pretty v4.3.0+incompatible
@@ -10,6 +11,7 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/viper v1.6.2
+	google.golang.org/genproto v0.0.0-20190502173448-54afdca5d873
 	k8s.io/api v0.17.4
 	k8s.io/apimachinery v0.17.4
 	k8s.io/cli-runtime v0.17.4

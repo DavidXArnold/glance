@@ -182,6 +182,11 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}
 
 	nm := make(NodeMap)
+	k8sver, err := k8sClient.Discovery().ServerVersion()
+	if err != nil {
+		log.Fatalf(" %+v ", err.Error())
+	}
+
 	nodes, err := getNodes(k8sClient)
 	if err != nil {
 		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
@@ -192,8 +197,9 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}
 
 	log.WithFields(log.Fields{
-		"Host": gc.restConfig.Host,
-	}).Infof("There are %d node(s) in the cluster\n", len(nodes.Items))
+		"Host":           gc.restConfig.Host,
+		"Master Version": k8sver.GitVersion,
+	}).Infof("There are %d node(s) in the cluster", len(nodes.Items))
 
 	for i := range nodes.Items {
 		nn := nodes.Items[i].Name
@@ -461,7 +467,7 @@ func getCloudInfo(n *v1.Node, ns *NodeStats) {
 		case "aws":
 			ns.CloudInfo.Aws = getAWSNodeInfo(id[1])
 		case "gce":
-			log.Info("gce not yet implemented")
+			ns.CloudInfo.Gce = getGKENodePool(id[1])
 		case "azure":
 			log.Info("azure not yet implemented")
 		default:

@@ -15,6 +15,7 @@ package cmd
 
 import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	containerpb "google.golang.org/genproto/googleapis/container/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -52,7 +53,7 @@ type NodeMap map[string]*NodeStats
 type cloudInfo struct {
 	Aws *ec2.DescribeInstancesOutput `json:",omitempty"`
 	//nolint unused
-	Gce map[string]string `json:",omitempty"`
+	Gce *containerpb.NodePool `json:",omitempty"`
 	//nolint unused
 	Azure map[string]string `json:",omitempty"`
 }
