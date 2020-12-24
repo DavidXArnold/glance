@@ -11,35 +11,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package util
+package cmd
 
 import (
-	"strings"
+	"context"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
+
+	container "cloud.google.com/go/container/apiv1"
+	containerpb "google.golang.org/genproto/googleapis/container/v1"
 )
 
-// SetupLogger sets configuration for the default logger
-func SetupLogger() (err error) {
-	var (
-		lf = strings.ToLower(viper.GetString("output"))
-	)
-
-	// Set log format
-	switch lf {
-	case "json":
-		log.SetFormatter(&log.JSONFormatter{})
-	default:
-		log.SetFormatter(&log.TextFormatter{
-			DisableLevelTruncation: true,
-		})
+func getGKENodePool(nodepool string) (np *containerpb.NodePool) {
+	ctx := context.Background()
+	c, err := container.NewClusterManagerClient(ctx)
+	if err != nil {
+		log.Warn(err)
+		return nil
 	}
-	return nil
-}
-
-// ParseProviderID returns the cloud provider and associated info
-func ParseProviderID(pi string) (cp string, id []string) {
-	s := strings.Split(pi, ":")
-	return s[0], strings.Split(strings.TrimPrefix(s[1], "//"), "/")
+	req := &containerpb.GetNodePoolRequest{
+		Name: nodepool,
+	}
+	resp, err := c.GetNodePool(ctx, req)
+	if err != nil {
+		log.Warnf("unable to retrieve nodepool: %v %v", nodepool, err)
+		return nil
+	}
+	return resp
 }
