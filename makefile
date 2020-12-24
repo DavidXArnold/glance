@@ -1,5 +1,5 @@
 ARCH?=amd64
-GO_VERSION?=1.14
+GO_VERSION?=1.15
 GIT_VERSION := $(shell git describe --tags --always --abbrev=8)
 RELEASE_VERSION := $(shell sed -nE 's/^var[[:space:]]Version[[:space:]]=[[:space:]]"([^"]+)".*/\1/p' version/version.go)
 PACKAGE := gitlab.com/davidxarnold/glance
