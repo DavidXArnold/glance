@@ -173,6 +173,7 @@ func NewGlanceCmd() *cobra.Command {
 }
 
 // GlanceK8s displays cluster information for a given clientset
+//nolint gocyclo
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	c := &Totals{
 		TotalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
@@ -215,8 +216,6 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	labelSelector := labels.Everything()
 	ls := viper.GetString("selector")
 	fs := viper.GetString("field-selector")
-
-	// log.Printf(" %+v ", ls+" "+fs)
 
 	if fs != "" || ls != "" {
 		labelSelector, err = labels.Parse(ls + " " + fs)
@@ -277,10 +276,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		}
 
 		if viper.GetBool("pods") {
-			nm[nn].PodInfo, err = getPodsInfo(podList, metricsClientset, labelSelector)
-			if err != nil {
-				return fmt.Errorf("Unable to retrieve Pod Info: %v", err)
-			}
+			nm[nn].PodInfo = getPodsInfo(podList, metricsClientset, labelSelector)
 		}
 	}
 
@@ -353,15 +349,14 @@ func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs, limits map[v1.Res
 	return
 }
 
-func getPodsInfo(podList *v1.PodList, metricsClient metricsclientset.Interface, selector labels.Selector) (map[string]*PodInfo, error) {
+func getPodsInfo(podList *v1.PodList, metricsClient metricsclientset.Interface, selector labels.Selector) map[string]*PodInfo {
 	podMap := make(map[string]*PodInfo)
 	for i := range podList.Items {
 		n := podList.Items[i].Name
 		pml, _ := getPodMetricsFromMetricsAPI(metricsClient, n, getNamespace(), selector)
 		log.Infof("pml: %+v", pml.Items)
-
 	}
-	return podMap, nil
+	return podMap
 }
 
 // reimplementation of https://github.com/kubernetes/kubernetes/blob/master/pkg/kubectl/cmd/top/top_node.go#L159
