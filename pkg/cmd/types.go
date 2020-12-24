@@ -32,23 +32,32 @@ type GlanceConfig struct {
 //nolint unused
 // NodeStats is an object to hold relevent node stats
 type NodeStats struct {
-	Status                  string             `json:",omitempty"`
-	ProviderID              string             `json:",omitempty"`
-	NodeInfo                v1.NodeSystemInfo  `json:",omitempty"`
-	CloudInfo               cloudInfo          `json:",omitempty"`
-	AllocatableCPU          *resource.Quantity `json:",omitempty"`
-	AllocatableMemory       *resource.Quantity `json:",omitempty"`
-	CapacityCPU             *resource.Quantity `json:",omitempty"`
-	CapacityMemory          *resource.Quantity `json:",omitempty"`
-	AllocatedCPUrequests    resource.Quantity  `json:",omitempty"`
-	AllocatedCPULimits      resource.Quantity  `json:",omitempty"`
-	AllocatedMemoryRequests resource.Quantity  `json:",omitempty"`
-	AllocatedMemoryLimits   resource.Quantity  `json:",omitempty"`
-	UsageCPU                *resource.Quantity `json:",omitempty"`
-	UsageMemory             *resource.Quantity `json:",omitempty"`
+	Status                  string              `json:",omitempty"`
+	ProviderID              string              `json:",omitempty"`
+	NodeInfo                v1.NodeSystemInfo   `json:",omitempty"`
+	CloudInfo               cloudInfo           `json:",omitempty"`
+	AllocatableCPU          *resource.Quantity  `json:",omitempty"`
+	AllocatableMemory       *resource.Quantity  `json:",omitempty"`
+	CapacityCPU             *resource.Quantity  `json:",omitempty"`
+	CapacityMemory          *resource.Quantity  `json:",omitempty"`
+	AllocatedCPUrequests    resource.Quantity   `json:",omitempty"`
+	AllocatedCPULimits      resource.Quantity   `json:",omitempty"`
+	AllocatedMemoryRequests resource.Quantity   `json:",omitempty"`
+	AllocatedMemoryLimits   resource.Quantity   `json:",omitempty"`
+	UsageCPU                *resource.Quantity  `json:",omitempty"`
+	UsageMemory             *resource.Quantity  `json:",omitempty"`
+	PodInfo                 map[string]*PodInfo `json:",omitempty"`
 }
 
 type NodeMap map[string]*NodeStats
+
+type PodInfo struct {
+	Qos         *v1.PodQOSClass    `json:",omitempty"`
+	PodReqs     *v1.ResourceList   `json:",omitempty"`
+	PodLimits   *v1.ResourceList   `json:",omitempty"`
+	UsageCPU    *resource.Quantity `json:",omitempty"`
+	UsageMemory *resource.Quantity `json:",omitempty"`
+}
 
 type cloudInfo struct {
 	Aws *ec2.DescribeInstancesOutput `json:",omitempty"`
