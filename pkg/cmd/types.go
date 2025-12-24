@@ -1,5 +1,5 @@
 /*
-Copyright 2020 David Arnold
+Copyright 2025 David Arnold
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -14,8 +14,8 @@ limitations under the License.
 package cmd
 
 import (
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	containerpb "google.golang.org/genproto/googleapis/container/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -29,7 +29,7 @@ type GlanceConfig struct {
 	genericclioptions.IOStreams
 }
 
-//nolint unused
+// nolint unused
 // NodeStats is an object to hold relevent node stats
 type NodeStats struct {
 	Status                  string              `json:",omitempty"`
@@ -67,8 +67,8 @@ type cloudInfo struct {
 	Azure map[string]string `json:",omitempty"`
 }
 
-//nolint unused
-//Totals is an object to hold totals
+// nolint unused
+// Totals is an object to hold totals
 type Totals struct {
 	TotalAllocatableCPU          *resource.Quantity `json:",omitempty"`
 	TotalAllocatableMemory       *resource.Quantity `json:",omitempty"`

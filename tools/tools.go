@@ -1,7 +1,7 @@
-// +build tools
+//go:build tools
 
 /*
-Copyright 2020 David Arnold
+Copyright 2025 David Arnold
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -17,4 +17,5 @@ package tools
 
 import (
 	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
+	_ "golang.org/x/tools/cmd/goimports"
 )
