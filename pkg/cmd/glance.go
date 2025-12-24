@@ -14,6 +14,7 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,7 +23,7 @@ import (
 
 	"github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
-	"gitlab.com/davidxarnold/glance/pkg/util"
+	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	v "gitlab.com/davidxarnold/glance/version"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -31,10 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubectl/pkg/cmd/top"
-	"k8s.io/kubectl/pkg/metricsutil"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
-	nodeutil "k8s.io/kubernetes/pkg/controller/util/node"
-	"k8s.io/metrics/pkg/apis/metrics"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -93,6 +91,40 @@ func NewGlanceConfig() (gc *GlanceConfig, err error) {
 }
 
 // NewGlanceCmd provides a cobra command
+func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *string, cloudInfo, pods *bool) {
+	cmd.PersistentFlags().StringVar(
+		fieldSelector, "field-selector", "",
+		//nolint lll
+		"Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
+	_ = viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
+	cmd.PersistentFlags().StringVar(
+		labelSelector, "selector", "",
+		"Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
+	cmd.PersistentFlags().StringVarP(
+		output, "output", "o", "txt",
+		"Output format. One of: txt|pretty|json|dash|pie|chart")
+	cmd.PersistentFlags().BoolVarP(
+		cloudInfo, "cloud-info", "c", false,
+		"-c, --cloud-info  Include node metadata (query from cloud provider). true|false")
+	cmd.PersistentFlags().BoolVarP(
+		pods, "pods", "p", false,
+		"-p, --pods  Display pod resources. true|false")
+	cmd.PersistentFlags().Bool(
+		"exact", false,
+		"Display exact values instead of human-readable format (e.g., 1000m instead of 1)")
+
+	KubernetesConfigFlags.AddFlags(cmd.Flags())
+	cobra.OnInitialize(initConfig)
+
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+
+	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
+	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
+	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("cloud-info"))
+	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
+	_ = viper.BindPFlags(cmd.Flags())
+}
+
 func NewGlanceCmd() *cobra.Command {
 	var (
 		labelSelector string
@@ -122,7 +154,7 @@ func NewGlanceCmd() *cobra.Command {
 			}
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return util.SetupLogger()
+			return glanceutil.SetupLogger()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// create the clientset
@@ -141,40 +173,18 @@ func NewGlanceCmd() *cobra.Command {
 
 	cmd.Version = v.Version
 
-	cmd.PersistentFlags().StringVar(
-		&fieldSelector, "field-selector", "",
-		//nolint lll
-		"Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
-	_ = viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
-	cmd.PersistentFlags().StringVar(
-		&labelSelector, "selector", "",
-		"Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
-	cmd.PersistentFlags().StringVarP(
-		&output, "output", "o", "txt",
-		"-o, --output='': Output format. One of: txt|json")
-	cmd.PersistentFlags().BoolVarP(
-		&cloudInfo, "cloud-info", "c", false,
-		"-c, --cloud-info  Include node metadata (query from cloud provider). true|false")
-	cmd.PersistentFlags().BoolVarP(
-		&pods, "pods", "p", false,
-		"-p, --pods  Display pod resources. true|false")
+	setupGlanceFlags(cmd, &labelSelector, &fieldSelector, &output, &cloudInfo, &pods)
 
-	KubernetesConfigFlags.AddFlags(cmd.Flags())
-	cobra.OnInitialize(initConfig)
-
-	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-
-	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
-	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
-	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("cloud-info"))
-	_ = viper.BindPFlags(cmd.Flags())
+	// Add live subcommand
+	cmd.AddCommand(NewLiveCmd(gc))
 
 	return cmd
 }
 
 // GlanceK8s displays cluster information for a given clientset
-//nolint gocyclo
+// nolint gocyclo
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
+	ctx := context.Background()
 	c := &Totals{
 		TotalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
 		TotalAllocatableMemory:       resource.NewQuantity(0, resource.BinarySI),
@@ -194,7 +204,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		log.Fatalf(" %+v ", err.Error())
 	}
 
-	nodes, err := getNodes(k8sClient)
+	nodes, err := getNodes(ctx, k8sClient)
 	if err != nil {
 		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
 	}
@@ -226,18 +236,23 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	for i := range nodes.Items {
 		nn := nodes.Items[i].Name
-		_, nc := nodeutil.GetNodeCondition(
-			&nodes.Items[i].Status,
-			v1.NodeReady)
+		// Get node condition for ready status
+		var readyCondition *v1.NodeCondition
+		for j := range nodes.Items[i].Status.Conditions {
+			if nodes.Items[i].Status.Conditions[j].Type == v1.NodeReady {
+				readyCondition = &nodes.Items[i].Status.Conditions[j]
+				break
+			}
+		}
 
-		if nc.Type != v1.NodeReady && nc.Status != "True" {
+		if readyCondition == nil || readyCondition.Status != v1.ConditionTrue {
 			nm[nn] = &NodeStats{
 				Status: "Not Ready",
 			}
 			continue
 		}
 
-		podList, err := getPods(k8sClient, nn)
+		podList, err := getPods(ctx, k8sClient, nn)
 		if err != nil {
 			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
 		}
@@ -260,7 +275,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		c.TotalAllocatedMemoryRequests.Add(nm[nn].AllocatedMemoryRequests)
 		c.TotalAllocatedMemoryLimits.Add(nm[nn].AllocatedMemoryLimits)
 
-		nodeMetrics, _, err := getNodeUtilization(k8sClient, nn, gc)
+		nodeMetrics, _, err := getNodeUtilization(ctx, k8sClient, nn, gc)
 		if err != nil {
 			log.Fatalf("Unable to retrieve Node metrics (metrics-server running?): %v", err)
 		}
@@ -276,7 +291,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		}
 
 		if viper.GetBool("pods") {
-			nm[nn].PodInfo = getPodsInfo(podList, metricsClientset, labelSelector)
+			nm[nn].PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector)
 		}
 	}
 
@@ -285,8 +300,8 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	return nil
 }
 
-func getNodes(clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
-	nodes, err = clientset.CoreV1().Nodes().List(
+func getNodes(ctx context.Context, clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
+	nodes, err = clientset.CoreV1().Nodes().List(ctx,
 		metav1.ListOptions{LabelSelector: viper.GetString("selector"), FieldSelector: viper.GetString("field-selector")},
 	)
 	if err != nil {
@@ -295,14 +310,17 @@ func getNodes(clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
 	return nodes, err
 }
 
-func getPods(clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList, err error) {
+func getPods(ctx context.Context, clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList, err error) {
 	fieldSelector, err := fields.ParseSelector(
 		"spec.nodeName=" + nodeName + ",status.phase!=" + string(v1.PodSucceeded) + ",status.phase!=" + string(v1.PodFailed))
 	if err != nil {
 		return nil, err
 	}
 
-	nodeNonTerminatedPodsList, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{FieldSelector: fieldSelector.String()})
+	nodeNonTerminatedPodsList, err := clientset.CoreV1().Pods("").List(
+		ctx,
+		metav1.ListOptions{FieldSelector: fieldSelector.String()},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -349,24 +367,22 @@ func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs, limits map[v1.Res
 	return
 }
 
-func getPodsInfo(podList *v1.PodList, metricsClient metricsclientset.Interface, selector labels.Selector) map[string]*PodInfo {
+func getPodsInfo(
+	ctx context.Context,
+	podList *v1.PodList,
+	metricsClient metricsclientset.Interface,
+	selector labels.Selector,
+) map[string]*PodInfo {
 	podMap := make(map[string]*PodInfo)
 	for i := range podList.Items {
 		n := podList.Items[i].Name
-		pml, _ := getPodMetricsFromMetricsAPI(metricsClient, n, getNamespace(), selector)
+		pml, _ := getPodMetricsFromMetricsAPI(ctx, metricsClient, n, getNamespace(), selector)
 		log.Infof("pml: %+v", pml.Items)
 	}
 	return podMap
 }
 
-// reimplementation of https://github.com/kubernetes/kubernetes/blob/master/pkg/kubectl/cmd/top/top_node.go#L159
-func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *GlanceConfig) (
-	[]metrics.NodeMetrics, map[string]v1.ResourceList, error) {
-	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
-	if err != nil {
-		return nil, nil, err
-	}
-
+func getLabelSelector() (labels.Selector, error) {
 	labelSelector := labels.Everything()
 	ls := viper.GetString("selector")
 	fs := viper.GetString("field-selector")
@@ -374,47 +390,59 @@ func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *Gl
 	log.Printf(" %+v ", ls+" "+fs)
 
 	if fs != "" || ls != "" {
+		var err error
 		labelSelector, err = labels.Parse(ls + " " + fs)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
+	return labelSelector, nil
+}
 
-	apiGroups, err := clientset.DiscoveryClient.ServerGroups()
+// reimplementation of https://github.com/kubernetes/kubernetes/blob/master/pkg/kubectl/cmd/top/top_node.go#L159
+func getNodeUtilization(ctx context.Context, clientset *kubernetes.Clientset, nodeName string, gc *GlanceConfig) (
+	[]metricsapi.NodeMetrics, map[string]v1.ResourceList, error) {
+	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	labelSelector, err := getLabelSelector()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	apiGroups, err := clientset.Discovery().ServerGroups()
 	if err != nil {
 		return nil, nil, err
 	}
 	metricsAPIAvailable := top.SupportedMetricsAPIVersionAvailable(apiGroups)
 
-	heapsterClient := metricsutil.NewHeapsterMetricsClient(clientset.CoreV1(),
-		metricsutil.DefaultHeapsterNamespace, metricsutil.DefaultHeapsterScheme,
-		metricsutil.DefaultHeapsterService, metricsutil.DefaultHeapsterPort)
-
+	// Note: Heapster is deprecated and removed from Kubernetes
+	// The metrics-server is now the standard metrics provider
 	//nolint staticcheck
 	metrics := &metricsapi.NodeMetricsList{}
 	if metricsAPIAvailable {
-		metrics, err = getNodeMetricsFromMetricsAPI(metricsClientset, nodeName, labelSelector)
+		metrics, err = getNodeMetricsFromMetricsAPI(ctx, metricsClientset, nodeName, labelSelector)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		metrics, err = heapsterClient.GetNodeMetrics(nodeName, labelSelector.String())
-		if err != nil {
-			return nil, nil, err
-		}
+		// If metrics-server is not available, return error
+		return nil, nil, errors.New("metrics API not available - ensure metrics-server is installed")
 	}
 	if len(metrics.Items) == 0 {
 		return nil, nil, errors.New("metrics not available yet")
 	}
 	var nodes []v1.Node
 	if len(nodeName) > 0 {
-		node, err := clientset.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+		node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
 			return nil, nil, err
 		}
 		nodes = append(nodes, *node)
 	} else {
-		nodeList, err := clientset.CoreV1().Nodes().List(metav1.ListOptions{
+		nodeList, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{
 			LabelSelector: labelSelector.String(),
 		})
 		if err != nil {
@@ -432,20 +460,20 @@ func getNodeUtilization(clientset *kubernetes.Clientset, nodeName string, gc *Gl
 	return metrics.Items, allocatable, nil
 }
 
-//nolint interfacer
-func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, resourceName string, selector labels.Selector) (*metricsapi.NodeMetricsList, error) {
+// nolint interfacer
+func getNodeMetricsFromMetricsAPI(ctx context.Context, metricsClient metricsclientset.Interface, resourceName string, selector labels.Selector) (*metricsapi.NodeMetricsList, error) {
 	var err error
 	versionedMetrics := &metricsV1beta1api.NodeMetricsList{}
 	mc := metricsClient.MetricsV1beta1()
 	nm := mc.NodeMetricses()
 	if resourceName != "" {
-		m, err := nm.Get(resourceName, metav1.GetOptions{})
+		m, err := nm.Get(ctx, resourceName, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
 		versionedMetrics.Items = []metricsV1beta1api.NodeMetrics{*m}
 	} else {
-		versionedMetrics, err = nm.List(metav1.ListOptions{LabelSelector: selector.String()})
+		versionedMetrics, err = nm.List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
 		if err != nil {
 			return nil, err
 		}
@@ -458,20 +486,20 @@ func getNodeMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, reso
 	return metrics, nil
 }
 
-//nolint interfacer
-func getPodMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, resourceName string, namespace string, selector labels.Selector) (*metricsapi.PodMetricsList, error) {
+// nolint interfacer
+func getPodMetricsFromMetricsAPI(ctx context.Context, metricsClient metricsclientset.Interface, resourceName string, namespace string, selector labels.Selector) (*metricsapi.PodMetricsList, error) {
 	var err error
 	versionedMetrics := &metricsV1beta1api.PodMetricsList{}
 	mc := metricsClient.MetricsV1beta1()
 	pm := mc.PodMetricses(namespace)
 	if resourceName != "" {
-		m, err := pm.Get(resourceName, metav1.GetOptions{})
+		m, err := pm.Get(ctx, resourceName, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
 		versionedMetrics.Items = []metricsV1beta1api.PodMetrics{*m}
 	} else {
-		versionedMetrics, err = pm.List(metav1.ListOptions{LabelSelector: selector.String()})
+		versionedMetrics, err = pm.List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
 		if err != nil {
 			return nil, err
 		}
@@ -487,7 +515,7 @@ func getPodMetricsFromMetricsAPI(metricsClient metricsclientset.Interface, resou
 func getCloudInfo(n *v1.Node, ns *NodeStats) {
 	if n.Spec.ProviderID != "" {
 		ns.ProviderID = n.Spec.ProviderID
-		cp, id := util.ParseProviderID(ns.ProviderID)
+		cp, id := glanceutil.ParseProviderID(ns.ProviderID)
 		switch cp {
 		case "aws":
 			ns.CloudInfo.Aws = getAWSNodeInfo(id[1])

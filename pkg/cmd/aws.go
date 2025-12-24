@@ -1,5 +1,5 @@
 /*
-Copyright 2020 David Arnold
+Copyright 2025 David Arnold
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -16,30 +16,30 @@ package cmd
 import (
 	"context"
 
-	"github.com/aws/aws-sdk-go-v2/aws/awserr"
-	"github.com/aws/aws-sdk-go-v2/aws/external"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/smithy-go"
 	log "github.com/sirupsen/logrus"
 )
 
 func getAWSNodeInfo(id string) *ec2.DescribeInstancesOutput {
-	cfg, err := external.LoadDefaultAWSConfig()
+	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		log.Fatalf("failed to load aws config, " + err.Error())
+		log.Fatalf("failed to load aws config: %v", err)
 	}
-	svc := ec2.New(cfg)
+	svc := ec2.NewFromConfig(cfg)
 	input := &ec2.DescribeInstancesInput{
-		InstanceIds: []string{
-			id,
-		},
+		InstanceIds: []string{id},
 	}
-	req := svc.DescribeInstancesRequest(input)
-	result, err := req.Send(context.Background())
+	result, err := svc.DescribeInstances(context.Background(), input)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			log.Warnf("error occurred describing instance: %v %v", id, aerr.Message())
+		var ae smithy.APIError
+		if err.(interface{ As(interface{}) bool }).As(&ae) {
+			log.Warnf("error occurred describing instance %s: %v", id, ae.Error())
 			return &ec2.DescribeInstancesOutput{}
 		}
+		log.Warnf("error occurred describing instance %s: %v", id, err)
+		return &ec2.DescribeInstancesOutput{}
 	}
-	return result.DescribeInstancesOutput
+	return result
 }

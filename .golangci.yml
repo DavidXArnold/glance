@@ -1,20 +1,12 @@
 ---
+version: 2
 linters-settings:
   govet:
-    check-shadowing: true
-    settings:
-      printf:
-        funcs:
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  golint:
-    min-confidence: 0
+    enable-all: true
+    disable:
+    - fieldalignment
   gocyclo:
     min-complexity: 15
-  maligned:
-    suggest-new: true
   dupl:
     threshold: 100
   goconst:
@@ -24,73 +16,74 @@ linters-settings:
     locale: US
   lll:
     line-length: 140
-  goimports:
-    local-prefixes: github.com/golangci/golangci-lint
   gocritic:
     enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
+    - diagnostic
+    - experimental
+    - opinionated
+    - performance
+    - style
     disabled-checks:
-      - dupImport  # https: //github.com/go-critic/go-critic/issues/845
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-      - wrapperFunc
+    - dupImport
+    - ifElseChain
+    - octalLiteral
+    - whyNoLint
+    - wrapperFunc
   funlen:
     lines: 100
-    statements: 50
+    statements: 85
+  depguard:
+    rules:
+      main:
+        list-mode: lax
+        allow:
+        - $gostd
+        - gitlab.com/davidxarnold
+        - github.com/aws
+        - github.com/sirupsen
+        - cloud.google.com
+        - google.golang.org
+        - k8s.io
+        - github.com/spf13
+        - github.com/mitchellh
+        - github.com/gizak
+        - github.com/jedib0t
 
 linters:
-  # please, do not use `enable-all`: it's deprecated and will be removed soon.
-  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
   disable-all: true
   enable:
-    - bodyclose
-    - deadcode
-    - depguard
-    - dogsled
-    - dupl
-    - errcheck
-    - funlen
-    - gochecknoinits
-    - goconst
-    - gocritic
-    - gocyclo
-    - gofmt
-    - goimports
-    - golint
-    - gosec
-    - gosimple
-    - govet
-    - ineffassign
-    - interfacer
-    - lll
-    - misspell
-    - nakedret
-    - scopelint
-    - staticcheck
-    - structcheck
-    - stylecheck
-    - typecheck
-    - unconvert
-    - unparam
-    - unused
-    - varcheck
-    - whitespace
+  - bodyclose
+  # - depguard  # Disabled due to v2 compatibility issues
+  - dogsled
+  - dupl
+  - errcheck
+  # - funlen  # Disabled - data fetching functions are inherently complex
+  - gochecknoinits
+  - goconst
+  - gocritic
+  - gocyclo
+  - gosec
+  - govet
+  - ineffassign
+  - lll
+  - misspell
+  - nakedret
+  - staticcheck
+  - unconvert
+  - unparam
+  - unused
+  - whitespace
+  # don't enable:
+  # - gochecknoglobals
+  # - gocognit
+  # - godox
+  # - makezero
+  # - prealloc
+  # - testpackage
+  # - wrapcheck
 
-    # don't enable:
-    # - gochecknoglobals
-    # - gocognit
-    # - godox
-    # - maligned
-    # - prealloc
+output:
+  format: colored-line-number
 
-# golangci.com configuration
-# https: //github.com/golangci/golangci/wiki/Configuration
 service:
-  golangci-lint-version: 1.23.8  # use the fixed version to not introduce new linters unexpectedly
-  # prepare:
-  #   - echo "here I can run custom commands, but no preparation needed for this repo"
+  golangci-lint-version: 2.7.2

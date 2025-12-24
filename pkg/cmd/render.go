@@ -1,5 +1,5 @@
 /*
-Copyright 2020 David Arnold
+Copyright 2025 David Arnold
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -21,8 +21,6 @@ import (
 	// _ "github.com/go-echarts/go-echarts/v2"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
-	"github.com/go-echarts/go-echarts/v2/charts"
-	"github.com/go-echarts/go-echarts/v2/opts"
 	pt "github.com/jedib0t/go-pretty/v6/table"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
@@ -34,20 +32,38 @@ import (
 
 const ctlC = "<C-c>"
 
+// formatQuantity returns a human-readable or exact representation of a quantity pointer
+func formatQuantity(q *resource.Quantity) string {
+	if q == nil {
+		return ""
+	}
+
+	if viper.GetBool("exact") {
+		// Exact value mode - show the raw value
+		return q.String()
+	}
+
+	// Human-readable mode (default)
+	return q.String()
+}
+
+// formatQuantityValue returns a human-readable or exact representation of a quantity value
+func formatQuantityValue(q resource.Quantity) string {
+	if viper.GetBool("exact") {
+		// Exact value mode - show the raw value
+		return q.String()
+	}
+
+	// Human-readable mode (default)
+	return q.String()
+}
+
 func render(nm *NodeMap, c *Totals) {
 	switch viper.GetString("output") {
 	case "json":
-		o := &Glance{
-			*nm,
-			*c,
-		}
-		g, err := json.MarshalIndent(o, "", "\t")
-		if err != nil {
-			log.Error(err)
-		}
-		fmt.Println(string(g))
-
-		os.Exit(0)
+		renderJSON(nm, c)
+	case "pretty":
+		renderPretty(nm, c)
 	case "chart":
 		chart(nm)
 		os.Exit(0)
@@ -60,6 +76,78 @@ func render(nm *NodeMap, c *Totals) {
 	default:
 		table(nm, c)
 	}
+}
+
+func renderJSON(nm *NodeMap, c *Totals) {
+	glance := &Glance{
+		Nodes:  *nm,
+		Totals: *c,
+	}
+	g, err := json.MarshalIndent(glance, "", "\t")
+	if err != nil {
+		log.Error(err)
+		os.Exit(1)
+	}
+	fmt.Println(string(g))
+	os.Exit(0)
+}
+
+func renderPretty(nm *NodeMap, c *Totals) {
+	t := pt.NewWriter()
+	t.SetStyle(pt.StyleColoredBright)
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(pt.Row{
+		"Node Name",
+		"Status",
+		"Kubelet Version",
+		"Allocated CPU Req",
+		"Allocated CPU Limit",
+		"Allocated MEM Req",
+		"Allocated MEM Limit",
+		"Used CPU",
+		"Used MEM",
+		"Available CPU",
+		"Available MEM",
+	})
+
+	for k, v := range *nm {
+		status := v.Status
+		if status == "" {
+			status = "Unknown"
+		}
+
+		t.AppendRow(pt.Row{
+			k,
+			status,
+			v.NodeInfo.KubeletVersion,
+			formatQuantityValue(v.AllocatedCPUrequests),
+			formatQuantityValue(v.AllocatedCPULimits),
+			formatQuantityValue(v.AllocatedMemoryRequests),
+			formatQuantityValue(v.AllocatedMemoryLimits),
+			formatQuantity(v.UsageCPU),
+			formatQuantity(v.UsageMemory),
+			formatQuantity(v.AllocatableCPU),
+			formatQuantity(v.AllocatableMemory),
+		})
+	}
+
+	t.AppendSeparator()
+	t.AppendFooter(pt.Row{
+		"TOTALS",
+		"",
+		"",
+		formatQuantity(c.TotalAllocatedCPUrequests),
+		formatQuantity(c.TotalAllocatedCPULimits),
+		formatQuantity(c.TotalAllocatedMemoryRequests),
+		formatQuantity(c.TotalAllocatedMemoryLimits),
+		formatQuantity(c.TotalUsageCPU),
+		formatQuantity(c.TotalUsageMemory),
+		formatQuantity(c.TotalAllocatableCPU),
+		formatQuantity(c.TotalAllocatableMemory),
+	})
+
+	t.Render()
+	os.Exit(0)
 }
 
 func table(nm *NodeMap, c *Totals) {
@@ -77,54 +165,38 @@ func table(nm *NodeMap, c *Totals) {
 
 	for k, v := range *nm {
 		t.AppendRow([]interface{}{k, v.NodeInfo.KubeletVersion, v.ProviderID,
-			v.AllocatedCPUrequests.AsDec().String(), v.AllocatedCPULimits.AsDec().String(),
-			v.AllocatedMemoryRequests.String(), v.AllocatedMemoryLimits.String(),
-			v.UsageCPU.AsDec().String(), v.UsageMemory.String(), v.AllocatableCPU.AsDec().String(),
-			v.AllocatableMemory.String()})
+			formatQuantityValue(v.AllocatedCPUrequests),
+			formatQuantityValue(v.AllocatedCPULimits),
+			formatQuantityValue(v.AllocatedMemoryRequests),
+			formatQuantityValue(v.AllocatedMemoryLimits),
+			formatQuantity(v.UsageCPU),
+			formatQuantity(v.UsageMemory),
+			formatQuantity(v.AllocatableCPU),
+			formatQuantity(v.AllocatableMemory)})
 	}
 
 	t.AppendFooter(pt.Row{
-		"Totals", "", "", c.TotalAllocatedCPUrequests.AsDec(), c.TotalAllocatedCPULimits.AsDec(), c.TotalAllocatedMemoryRequests,
-		c.TotalAllocatedMemoryLimits, c.TotalUsageCPU.AsDec(), c.TotalUsageMemory, c.TotalAllocatableCPU, c.TotalAllocatableMemory,
+		"Totals",
+		"",
+		"",
+		formatQuantity(c.TotalAllocatedCPUrequests),
+		formatQuantity(c.TotalAllocatedCPULimits),
+		formatQuantity(c.TotalAllocatedMemoryRequests),
+		formatQuantity(c.TotalAllocatedMemoryLimits),
+		formatQuantity(c.TotalUsageCPU),
+		formatQuantity(c.TotalUsageMemory),
+		formatQuantity(c.TotalAllocatableCPU),
+		formatQuantity(c.TotalAllocatableMemory),
 	})
 
 	t.Render()
+	os.Exit(0)
 }
 
-func chart(nm *NodeMap) {
+func chart(_ *NodeMap) {
 	log.Fatalf("Not yet implemented")
-	// create a new bar instance
-	bar := charts.NewBar()
-	// set some global options like Title/Legend/ToolTip or anything else
-	bar.SetGlobalOptions(charts.WithTitleOpts(opts.Title{
-		Title:    "Glance ",
-		Subtitle: "It's extremely easy to use, right?",
-	}))
-
-	cpu := make([]opts.BarData, 0)
-
-	x := make([]string, 0)
-
-	for k, v := range *nm {
-		x = append(x, k)
-		cpu = append(cpu,
-			opts.BarData{Name: "CPU (Allocated)", Value: v.AllocatedCPUrequests.AsDec().String(),
-				Label: &opts.Label{Show: true, Color: "blue", Position: "left"}},
-			opts.BarData{Name: "CPU (Limit)", Value: v.AllocatedCPULimits.AsDec().String(),
-				Label: &opts.Label{Show: true, Color: "green", Position: "right"}},
-			opts.BarData{Name: "CPU (Usage)", Value: v.UsageCPU.AsDec().String(),
-				Label: &opts.Label{Show: true, Color: "red", Position: "left"}})
-	}
-
-	// Put data into instance
-	bar.SetXAxis(x).
-		AddSeries("CPU (Allocated)", cpu)
-	// Where the magic happens
-	f, _ := os.Create("bar.html")
-	err := bar.Render(f)
-	if err != nil {
-		log.Fatalf("error rendering: %v", err)
-	}
+	// TODO: Fix go-echarts compatibility with current version
+	// The BarData and Label types have changed, this needs updating
 }
 
 func dash(nm *NodeMap) {

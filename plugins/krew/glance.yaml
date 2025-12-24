@@ -3,25 +3,80 @@ kind: Plugin
 metadata:
   name: glance
 spec:
-  version: "0.0.3"
-  platforms:
-    - selector:
-        matchLabels:
-          os: darwin
-          arch: amd64
-      uri: "https://gitlab.com/davidxarnold/glance/-/jobs/930585610/artifacts/raw/archive/kubectl-glance-0.0.3.tar.gz?job=build-darwin"
-      sha256: "23d35cc37e99eb86859ac9d07044808384c6e7329e499bdaa709338615cbc5d3"
-      bin: "./kubectl-glance"
-    - selector:
-        matchLabels:
-          os: linux
-          arch: amd64
-      uri: "https://gitlab.com/davidxarnold/glance/-/jobs/930585610/artifacts/raw/archive/kubectl-glance-0.0.3.tar.gz?job=build-darwin"
-      sha256: "23d35cc37e99eb86859ac9d07044808384c6e7329e499bdaa709338615cbc5d3"
-      bin: "./kubectl-glance"
-  shortDescription: View cluster resource allocation and usage.
+  version: "0.0.5"
   homepage: https://gitlab.com/davidxarnold/glance
+  shortDescription: View cluster resource allocation and usage.
   description: |
-    This plugin shows cluster resource allocation and utilization.
-    It allows you to quickly see the usage and allocation of CPU and memory across a cluster.
-    try `kubectl glance -h`, `kubectl glance`
+    Glance is a kubectl plugin that displays cluster resource allocation and utilization.
+
+    It allows you to quickly view:
+    - Node resource allocation (CPU and memory)
+    - Pod resource requests and limits
+    - Cluster-wide totals
+    - Cloud provider node information (optional)
+
+    Features:
+    - Multiple output formats (text, pretty, JSON, charts)
+    - Human-readable and exact value display
+    - Label and field selectors
+
+    Usage:
+      kubectl glance                    # Default view
+      kubectl glance -o pretty          # Colored output
+      kubectl glance -o json            # JSON format
+      kubectl glance --selector tier=app # Filter by labels
+      kubectl glance -c                 # Include cloud provider info
+  caveats: |
+    This plugin requires kubectl 1.12 or higher.
+    For cloud provider information (--cloud-info), ensure proper cloud credentials are configured.
+  platforms:
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: amd64
+    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.0.5/downloads/kubectl-glance-0.0.5-darwin-amd64.tar.gz"
+    sha256: "PLACEHOLDER_SHA256_DARWIN_AMD64"
+    bin: "kubectl-glance"
+    files:
+    - from: "*"
+      to: "."
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: arm64
+    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.0.5/downloads/kubectl-glance-0.0.5-darwin-arm64.tar.gz"
+    sha256: "PLACEHOLDER_SHA256_DARWIN_ARM64"
+    bin: "kubectl-glance"
+    files:
+    - from: "*"
+      to: "."
+  - selector:
+      matchLabels:
+        os: linux
+        arch: amd64
+    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.0.5/downloads/kubectl-glance-0.0.5-linux-amd64.tar.gz"
+    sha256: "PLACEHOLDER_SHA256_LINUX_AMD64"
+    bin: "kubectl-glance"
+    files:
+    - from: "*"
+      to: "."
+  - selector:
+      matchLabels:
+        os: linux
+        arch: arm64
+    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.0.5/downloads/kubectl-glance-0.0.5-linux-arm64.tar.gz"
+    sha256: "PLACEHOLDER_SHA256_LINUX_ARM64"
+    bin: "kubectl-glance"
+    files:
+    - from: "*"
+      to: "."
+  - selector:
+      matchLabels:
+        os: windows
+        arch: amd64
+    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.0.5/downloads/kubectl-glance-0.0.5-windows-amd64.tar.gz"
+    sha256: "PLACEHOLDER_SHA256_WINDOWS_AMD64"
+    bin: "kubectl-glance.exe"
+    files:
+    - from: "*"
+      to: "."

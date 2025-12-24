@@ -1,5 +1,5 @@
 /*
-Copyright 2020 David Arnold
+Copyright 2025 David Arnold
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -19,7 +19,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	container "cloud.google.com/go/container/apiv1"
-	containerpb "google.golang.org/genproto/googleapis/container/v1"
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 )
 
 func getGKENodePool(nodepool string) (np *containerpb.NodePool) {
