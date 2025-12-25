@@ -8,19 +8,17 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.184.0
 	github.com/aws/smithy-go v1.22.1
 	github.com/gizak/termui/v3 v3.1.0
-	github.com/go-echarts/go-echarts/v2 v2.4.3
 	github.com/golangci/golangci-lint v1.64.8
 	github.com/jedib0t/go-pretty/v6 v6.6.3
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.0
-	google.golang.org/genproto v0.0.0-20241118233622-e639e219e697
+	golang.org/x/tools v0.31.0
 	k8s.io/api v0.31.2
 	k8s.io/apimachinery v0.31.2
 	k8s.io/cli-runtime v0.31.2
 	k8s.io/client-go v0.31.2
-	k8s.io/component-helpers v0.31.2
 	k8s.io/kubectl v0.31.2
 	k8s.io/metrics v0.31.2
 )
@@ -264,7 +262,6 @@ require (
 	golang.org/x/term v0.30.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
-	golang.org/x/tools v0.31.0 // indirect
 	google.golang.org/api v0.223.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20241209162323-e6fa225c2576 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250219182151-9fdb1cabc7b2 // indirect

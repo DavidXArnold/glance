@@ -60,18 +60,109 @@ install-tools: download-deps
 	@echo Installing tools from tools/tools.go
 	@cat ./tools/tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
 
-krew-plugin:
-	${SED} "s#\(version: \)\"[^\"]*\"#\1\"${RELEASE_VERSION}\"#" plugins/krew/glance.yaml
-	${SED} "s#PLACEHOLDER_SHA256_DARWIN_AMD64#${ARCHIVE_SHA_DARWIN_AMD64}#" plugins/krew/glance.yaml
-	${SED} "s#PLACEHOLDER_SHA256_DARWIN_ARM64#${ARCHIVE_SHA_DARWIN_ARM64}#" plugins/krew/glance.yaml
-	${SED} "s#PLACEHOLDER_SHA256_LINUX_AMD64#${ARCHIVE_SHA_LINUX_AMD64}#" plugins/krew/glance.yaml
-	${SED} "s#PLACEHOLDER_SHA256_LINUX_ARM64#${ARCHIVE_SHA_LINUX_ARM64}#" plugins/krew/glance.yaml
-	${SED} "s#PLACEHOLDER_SHA256_WINDOWS_AMD64#${ARCHIVE_SHA_WINDOWS_AMD64}#" plugins/krew/glance.yaml
+# Build binaries for all platforms (Step 1)
+PLATFORMS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64
+
+build-all:
+	@echo "Building for all platforms..."
+	@mkdir -p target/release
+	@for platform in $(PLATFORMS); do \
+		GOOS=$$(echo $$platform | cut -d'-' -f1); \
+		GOARCH=$$(echo $$platform | cut -d'-' -f2); \
+		OUTPUT="target/release/kubectl-glance-$(RELEASE_VERSION)-$$platform"; \
+		if [ "$$GOOS" = "windows" ]; then \
+			OUTPUT="$$OUTPUT.exe"; \
+		fi; \
+		echo "Building $$GOOS/$$GOARCH..."; \
+		GOOS=$$GOOS GOARCH=$$GOARCH CGO_ENABLED=0 go build -o $$OUTPUT ./cmd; \
+	done
+	@echo "Build complete!"
+
+# Create archives for all platforms (Step 1 continued)
+archive-all: build-all
+	@echo "Creating archives..."
+	@mkdir -p target/archives
+	@for platform in $(PLATFORMS); do \
+		BINARY="target/release/kubectl-glance-$(RELEASE_VERSION)-$$platform"; \
+		ARCHIVE="target/archives/kubectl-glance-$(RELEASE_VERSION)-$$platform.tar.gz"; \
+		if [ "$$(echo $$platform | cut -d'-' -f1)" = "windows" ]; then \
+			BINARY="$$BINARY.exe"; \
+		fi; \
+		echo "Archiving $$platform..."; \
+		tar -czvf $$ARCHIVE -C target/release $$(basename $$BINARY); \
+	done
+	@echo "Archives created in target/archives/"
+
+# Generate SHA256 checksums (Step 2)
+checksums: archive-all
+	@echo "Generating SHA256 checksums..."
+	@cd target/archives && shasum -a 256 *.tar.gz > checksums.txt
+	@cat target/archives/checksums.txt
+	@echo ""
+	@echo "Checksums saved to target/archives/checksums.txt"
+
+# Update krew manifest with version and checksums (Step 3)
+krew-plugin: checksums
+	@echo "Updating krew plugin manifest..."
+	@cp plugins/krew/glance.yaml plugins/krew/glance.yaml.bak
+	$(SED) "s#\(version: \)\"[^\"]*\"#\1\"$(RELEASE_VERSION)\"#" plugins/krew/glance.yaml
+	$(SED) "s#v[0-9]*\.[0-9]*\.[0-9]*#v$(RELEASE_VERSION)#g" plugins/krew/glance.yaml
+	$(eval SHA_DARWIN_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-darwin-amd64.tar.gz | cut -d' ' -f1))
+	$(eval SHA_DARWIN_ARM64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-darwin-arm64.tar.gz | cut -d' ' -f1))
+	$(eval SHA_LINUX_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-linux-amd64.tar.gz | cut -d' ' -f1))
+	$(eval SHA_LINUX_ARM64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-linux-arm64.tar.gz | cut -d' ' -f1))
+	$(eval SHA_WINDOWS_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-windows-amd64.tar.gz | cut -d' ' -f1))
+	$(SED) "s#PLACEHOLDER_SHA256_DARWIN_AMD64#$(SHA_DARWIN_AMD64)#" plugins/krew/glance.yaml
+	$(SED) "s#PLACEHOLDER_SHA256_DARWIN_ARM64#$(SHA_DARWIN_ARM64)#" plugins/krew/glance.yaml
+	$(SED) "s#PLACEHOLDER_SHA256_LINUX_AMD64#$(SHA_LINUX_AMD64)#" plugins/krew/glance.yaml
+	$(SED) "s#PLACEHOLDER_SHA256_LINUX_ARM64#$(SHA_LINUX_ARM64)#" plugins/krew/glance.yaml
+	$(SED) "s#PLACEHOLDER_SHA256_WINDOWS_AMD64#$(SHA_WINDOWS_AMD64)#" plugins/krew/glance.yaml
+	@rm -f plugins/krew/glance.yaml.bkp
+	@echo "Krew manifest updated!"
+	@echo ""
+	@echo "SHA256 checksums:"
+	@echo "  darwin-amd64:  $(SHA_DARWIN_AMD64)"
+	@echo "  darwin-arm64:  $(SHA_DARWIN_ARM64)"
+	@echo "  linux-amd64:   $(SHA_LINUX_AMD64)"
+	@echo "  linux-arm64:   $(SHA_LINUX_ARM64)"
+	@echo "  windows-amd64: $(SHA_WINDOWS_AMD64)"
+
+# Full release process: build, archive, checksum, update manifest
+release: krew-plugin
+	@echo ""
+	@echo "========================================="
+	@echo "Release v$(RELEASE_VERSION) prepared!"
+	@echo "========================================="
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Review plugins/krew/glance.yaml"
+	@echo "  2. Commit changes: git add -A && git commit -m 'Release v$(RELEASE_VERSION)'"
+	@echo "  3. Tag release: make tag-release"
+	@echo "  4. Push: git push && git push --tags"
+	@echo "  5. Upload archives from target/archives/ to GitLab release"
+	@echo "  6. Submit PR to kubernetes-sigs/krew-index"
+	@echo ""
 
 release_version:
 	@echo $(RELEASE_VERSION)
 
+# Reset krew manifest to use placeholders (for clean rebuilds)
+krew-reset:
+	@echo "Resetting krew manifest placeholders..."
+	git checkout plugins/krew/glance.yaml
+
+# Validate krew manifest locally
+krew-validate: krew-plugin
+	@echo "Validating krew manifest..."
+	kubectl krew install --manifest=plugins/krew/glance.yaml
+	kubectl glance --help
+	kubectl krew uninstall glance
+	@echo "Validation passed!"
+
 tag-release:
 	git tag v$(RELEASE_VERSION)
+
+clean:
+	rm -rf target/
 	
-.PHONY: test version build archive formula
+.PHONY: test version build archive formula build-all archive-all checksums krew-plugin release krew-reset krew-validate clean

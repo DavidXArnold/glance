@@ -17,11 +17,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	// _ "github.com/go-echarts/go-echarts/v2"
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
 	pt "github.com/jedib0t/go-pretty/v6/table"
+	"github.com/jedib0t/go-pretty/v6/text"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -93,103 +96,496 @@ func renderJSON(nm *NodeMap, c *Totals) {
 }
 
 func renderPretty(nm *NodeMap, c *Totals) {
+	// Print cluster summary dashboard
+	printClusterSummary(nm, c)
+
+	// Group nodes by status
+	readyNodes := make([]string, 0)
+	notReadyNodes := make([]string, 0)
+	for name, node := range *nm {
+		if node.Status == "Ready" {
+			readyNodes = append(readyNodes, name)
+		} else {
+			notReadyNodes = append(notReadyNodes, name)
+		}
+	}
+	sort.Strings(readyNodes)
+	sort.Strings(notReadyNodes)
+
+	// Create main table
 	t := pt.NewWriter()
-	t.SetStyle(pt.StyleColoredBright)
+	t.SetStyle(pt.StyleRounded)
 	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(pt.Row{
-		"Node Name",
-		"Status",
-		"Kubelet Version",
-		"Allocated CPU Req",
-		"Allocated CPU Limit",
-		"Allocated MEM Req",
-		"Allocated MEM Limit",
-		"Used CPU",
-		"Used MEM",
-		"Available CPU",
-		"Available MEM",
+
+	// Configure column colors
+	t.SetColumnConfigs([]pt.ColumnConfig{
+		{Number: 1, AutoMerge: false, Colors: text.Colors{text.FgHiWhite, text.Bold}},
+		{Number: 2, AutoMerge: false},
+		{Number: 3, AutoMerge: false, Colors: text.Colors{text.FgHiCyan}},
+		{Number: 4, AutoMerge: false},
+		{Number: 5, AutoMerge: false},
 	})
 
-	for k, v := range *nm {
+	t.AppendHeader(pt.Row{
+		"NODE",
+		"STATUS",
+		"VERSION",
+		"CPU UTILIZATION",
+		"MEMORY UTILIZATION",
+	})
+
+	// Add NotReady nodes first (if any) with red highlighting
+	for _, name := range notReadyNodes {
+		v := (*nm)[name]
+		t.AppendRow(pt.Row{
+			name,
+			text.Colors{text.FgRed, text.Bold}.Sprint("⊘ " + v.Status),
+			v.NodeInfo.KubeletVersion,
+			buildCPUUtilizationCell(v),
+			buildMemUtilizationCell(v),
+		})
+	}
+
+	// Add separator if we have both types
+	if len(notReadyNodes) > 0 && len(readyNodes) > 0 {
+		t.AppendSeparator()
+	}
+
+	// Add Ready nodes with green status
+	for _, name := range readyNodes {
+		v := (*nm)[name]
+		t.AppendRow(pt.Row{
+			name,
+			text.Colors{text.FgGreen, text.Bold}.Sprint("✓ " + v.Status),
+			v.NodeInfo.KubeletVersion,
+			buildCPUUtilizationCell(v),
+			buildMemUtilizationCell(v),
+		})
+	}
+
+	t.AppendSeparator()
+	t.AppendFooter(pt.Row{
+		text.Colors{text.FgHiWhite, text.Bold}.Sprint("CLUSTER TOTALS"),
+		fmt.Sprintf("%d nodes", len(*nm)),
+		"",
+		buildTotalCPUCell(c),
+		buildTotalMemCell(c),
+	})
+
+	fmt.Println()
+	t.Render()
+
+	// Print legend
+	printLegend()
+
+	os.Exit(0)
+}
+
+// printClusterSummary prints a dashboard header with cluster overview
+func printClusterSummary(nm *NodeMap, c *Totals) {
+	readyCount := 0
+	notReadyCount := 0
+	for _, node := range *nm {
+		if node.Status == "Ready" {
+			readyCount++
+		} else {
+			notReadyCount++
+		}
+	}
+
+	// Calculate cluster-wide utilization
+	cpuUsagePct := calculatePercentage(c.TotalUsageCPU, c.TotalAllocatableCPU)
+	memUsagePct := calculatePercentage(c.TotalUsageMemory, c.TotalAllocatableMemory)
+	cpuAllocPct := calculatePercentage(c.TotalAllocatedCPUrequests, c.TotalAllocatableCPU)
+	memAllocPct := calculatePercentage(c.TotalAllocatedMemoryRequests, c.TotalAllocatableMemory)
+
+	fmt.Println()
+	boxStyle := text.Colors{text.FgHiWhite, text.Bold}
+	topBorder := "╔" + strings.Repeat("═", 78) + "╗"
+	midBorder := "╠" + strings.Repeat("═", 78) + "╣"
+	botBorder := "╚" + strings.Repeat("═", 78) + "╝"
+	titleLine := "║" + centerText("🔍 KUBERNETES CLUSTER GLANCE", 78) + "║"
+
+	fmt.Println(boxStyle.Sprint(topBorder))
+	fmt.Println(boxStyle.Sprint(titleLine))
+	fmt.Println(boxStyle.Sprint(midBorder))
+
+	// Node status line
+	nodeStatus := fmt.Sprintf("║  Nodes: %s %d Ready  ", text.Colors{text.FgGreen}.Sprint("●"), readyCount)
+	if notReadyCount > 0 {
+		nodeStatus += fmt.Sprintf("%s %d NotReady  ", text.Colors{text.FgRed}.Sprint("●"), notReadyCount)
+	}
+	nodeStatus = padRight(nodeStatus, 79) + "║"
+	fmt.Println(nodeStatus)
+
+	fmt.Println(boxStyle.Sprint(midBorder))
+
+	// CPU Usage
+	cpuUsageBar := buildColoredProgressBar(cpuUsagePct)
+	cpuLine := fmt.Sprintf("║  CPU Usage:      %s %5.1f%%  (%s / %s)",
+		cpuUsageBar, cpuUsagePct,
+		formatQuantity(c.TotalUsageCPU),
+		formatQuantity(c.TotalAllocatableCPU))
+	fmt.Println(padRight(cpuLine, 79) + "║")
+
+	// CPU Allocated
+	cpuAllocBar := buildColoredProgressBar(cpuAllocPct)
+	cpuAllocLine := fmt.Sprintf("║  CPU Allocated:  %s %5.1f%%  (%s / %s)",
+		cpuAllocBar, cpuAllocPct,
+		formatQuantity(c.TotalAllocatedCPUrequests),
+		formatQuantity(c.TotalAllocatableCPU))
+	fmt.Println(padRight(cpuAllocLine, 79) + "║")
+
+	fmt.Println("║" + strings.Repeat(" ", 78) + "║")
+
+	// Memory Usage
+	memUsageBar := buildColoredProgressBar(memUsagePct)
+	memLine := fmt.Sprintf("║  Mem Usage:      %s %5.1f%%  (%s / %s)",
+		memUsageBar, memUsagePct,
+		formatQuantity(c.TotalUsageMemory),
+		formatQuantity(c.TotalAllocatableMemory))
+	fmt.Println(padRight(memLine, 79) + "║")
+
+	// Memory Allocated
+	memAllocBar := buildColoredProgressBar(memAllocPct)
+	memAllocLine := fmt.Sprintf("║  Mem Allocated:  %s %5.1f%%  (%s / %s)",
+		memAllocBar, memAllocPct,
+		formatQuantity(c.TotalAllocatedMemoryRequests),
+		formatQuantity(c.TotalAllocatableMemory))
+	fmt.Println(padRight(memAllocLine, 79) + "║")
+
+	fmt.Println(boxStyle.Sprint(botBorder))
+}
+
+// buildColoredProgressBar creates a colored progress bar based on percentage
+func buildColoredProgressBar(pct float64) string {
+	const width = 30
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+
+	filled := int(pct / 100 * float64(width))
+	empty := width - filled
+
+	var color text.Colors
+	switch {
+	case pct >= 90:
+		color = text.Colors{text.FgRed, text.Bold}
+	case pct >= 75:
+		color = text.Colors{text.FgYellow}
+	case pct >= 50:
+		color = text.Colors{text.FgHiYellow}
+	default:
+		color = text.Colors{text.FgGreen}
+	}
+
+	bar := color.Sprint(strings.Repeat("█", filled)) +
+		text.Colors{text.FgHiBlack}.Sprint(strings.Repeat("░", empty))
+
+	return "[" + bar + "]"
+}
+
+// buildSparkline creates a mini sparkline showing trend
+func buildSparkline(values ...float64) string {
+	chars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+	if len(values) == 0 {
+		return ""
+	}
+
+	// Find max value
+	maxVal := values[0]
+	for _, v := range values {
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+
+	if maxVal == 0 {
+		return strings.Repeat(string(chars[0]), len(values))
+	}
+
+	result := ""
+	for _, v := range values {
+		idx := int((v / maxVal) * float64(len(chars)-1))
+		if idx >= len(chars) {
+			idx = len(chars) - 1
+		}
+		result += string(chars[idx])
+	}
+	return result
+}
+
+// buildCPUUtilizationCell creates a detailed CPU utilization cell
+func buildCPUUtilizationCell(v *NodeStats) string {
+	if v.AllocatableCPU == nil || v.AllocatableCPU.IsZero() {
+		return "N/A"
+	}
+
+	usagePct := calculatePercentageFromQuantities(v.UsageCPU, v.AllocatableCPU)
+	reqPct := calculatePercentageFromQuantities(&v.AllocatedCPUrequests, v.AllocatableCPU)
+	limPct := calculatePercentageFromQuantities(&v.AllocatedCPULimits, v.AllocatableCPU)
+
+	// Mini progress bar (15 chars)
+	bar := buildMiniProgressBar(usagePct, 12)
+
+	// Sparkline showing req, usage, limit trend
+	spark := buildSparkline(reqPct, usagePct, limPct)
+
+	return fmt.Sprintf("%s %5.1f%% %s\nReq: %s  Limit: %s",
+		bar, usagePct, spark,
+		formatQuantityValue(v.AllocatedCPUrequests),
+		formatQuantityValue(v.AllocatedCPULimits))
+}
+
+// buildMemUtilizationCell creates a detailed memory utilization cell
+func buildMemUtilizationCell(v *NodeStats) string {
+	if v.AllocatableMemory == nil || v.AllocatableMemory.IsZero() {
+		return "N/A"
+	}
+
+	usagePct := calculatePercentageFromQuantities(v.UsageMemory, v.AllocatableMemory)
+	reqPct := calculatePercentageFromQuantities(&v.AllocatedMemoryRequests, v.AllocatableMemory)
+	limPct := calculatePercentageFromQuantities(&v.AllocatedMemoryLimits, v.AllocatableMemory)
+
+	// Mini progress bar (15 chars)
+	bar := buildMiniProgressBar(usagePct, 12)
+
+	// Sparkline showing req, usage, limit trend
+	spark := buildSparkline(reqPct, usagePct, limPct)
+
+	return fmt.Sprintf("%s %5.1f%% %s\nReq: %s  Lim: %s",
+		bar, usagePct, spark,
+		formatQuantityValue(v.AllocatedMemoryRequests),
+		formatQuantityValue(v.AllocatedMemoryLimits))
+}
+
+// buildMiniProgressBar creates a compact colored progress bar
+func buildMiniProgressBar(pct float64, width int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+
+	filled := int(pct / 100 * float64(width))
+	empty := width - filled
+
+	var color text.Colors
+	switch {
+	case pct >= 90:
+		color = text.Colors{text.FgRed, text.Bold}
+	case pct >= 75:
+		color = text.Colors{text.FgYellow}
+	case pct >= 50:
+		color = text.Colors{text.FgHiYellow}
+	default:
+		color = text.Colors{text.FgGreen}
+	}
+
+	return color.Sprint(strings.Repeat("▓", filled)) +
+		text.Colors{text.FgHiBlack}.Sprint(strings.Repeat("░", empty))
+}
+
+// buildTotalCPUCell creates the totals CPU cell
+func buildTotalCPUCell(c *Totals) string {
+	usagePct := calculatePercentage(c.TotalUsageCPU, c.TotalAllocatableCPU)
+	reqPct := calculatePercentage(c.TotalAllocatedCPUrequests, c.TotalAllocatableCPU)
+
+	return fmt.Sprintf("Usage: %5.1f%%  Req: %5.1f%%\n%s / %s",
+		usagePct, reqPct,
+		formatQuantity(c.TotalUsageCPU),
+		formatQuantity(c.TotalAllocatableCPU))
+}
+
+// buildTotalMemCell creates the totals memory cell
+func buildTotalMemCell(c *Totals) string {
+	usagePct := calculatePercentage(c.TotalUsageMemory, c.TotalAllocatableMemory)
+	reqPct := calculatePercentage(c.TotalAllocatedMemoryRequests, c.TotalAllocatableMemory)
+
+	return fmt.Sprintf("Usage: %5.1f%%  Req: %5.1f%%\n%s / %s",
+		usagePct, reqPct,
+		formatQuantity(c.TotalUsageMemory),
+		formatQuantity(c.TotalAllocatableMemory))
+}
+
+// calculatePercentage calculates percentage from two quantities
+func calculatePercentage(used, total *resource.Quantity) float64 {
+	if total == nil || total.IsZero() || used == nil {
+		return 0
+	}
+	return float64(used.MilliValue()) / float64(total.MilliValue()) * 100
+}
+
+// calculatePercentageFromQuantities calculates percentage (handles nil)
+func calculatePercentageFromQuantities(used, total *resource.Quantity) float64 {
+	if total == nil || total.IsZero() {
+		return 0
+	}
+	if used == nil {
+		return 0
+	}
+	return float64(used.MilliValue()) / float64(total.MilliValue()) * 100
+}
+
+// padRight pads a string to 79 characters (accounting for ANSI codes)
+func padRight(s string, _ int) string {
+	const width = 79
+	visibleLen := text.RuneWidthWithoutEscSequences(s)
+	if visibleLen >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visibleLen)
+}
+
+// centerText centers a string within a given width
+func centerText(s string, width int) string {
+	visibleLen := text.RuneWidthWithoutEscSequences(s)
+	if visibleLen >= width {
+		return s
+	}
+	leftPad := (width - visibleLen) / 2
+	rightPad := width - visibleLen - leftPad
+	return strings.Repeat(" ", leftPad) + s + strings.Repeat(" ", rightPad)
+}
+
+// printLegend prints a color legend
+func printLegend() {
+	fmt.Println()
+	fmt.Println(text.Colors{text.FgHiBlack}.Sprint("Legend: ") +
+		text.Colors{text.FgGreen}.Sprint("■ <50%") + "  " +
+		text.Colors{text.FgHiYellow}.Sprint("■ 50-75%") + "  " +
+		text.Colors{text.FgYellow}.Sprint("■ 75-90%") + "  " +
+		text.Colors{text.FgRed}.Sprint("■ >90%") + "  " +
+		text.Colors{text.FgHiBlack}.Sprint("Sparkline: Req→Usage→Limit"))
+	fmt.Println()
+}
+
+func table(nm *NodeMap, c *Totals) {
+	// Sort nodes by name for consistent output
+	nodeNames := make([]string, 0, len(*nm))
+	for name := range *nm {
+		nodeNames = append(nodeNames, name)
+	}
+	sort.Strings(nodeNames)
+
+	// Print header
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 120))
+	fmt.Println("  KUBERNETES CLUSTER RESOURCE OVERVIEW")
+	fmt.Println(strings.Repeat("=", 120))
+	fmt.Println()
+
+	// Create main node table with borders
+	t := pt.NewWriter()
+	t.SetStyle(pt.StyleLight)
+	t.SetOutputMirror(os.Stdout)
+
+	// Configure column alignment
+	t.SetColumnConfigs([]pt.ColumnConfig{
+		{Number: 1, Align: text.AlignLeft},   // Name
+		{Number: 2, Align: text.AlignCenter}, // Status
+		{Number: 3, Align: text.AlignLeft},   // Version
+		{Number: 4, Align: text.AlignRight},  // CPU Req
+		{Number: 5, Align: text.AlignRight},  // CPU Lim
+		{Number: 6, Align: text.AlignRight},  // CPU Use
+		{Number: 7, Align: text.AlignRight},  // CPU %
+		{Number: 8, Align: text.AlignRight},  // Mem Req
+		{Number: 9, Align: text.AlignRight},  // Mem Lim
+		{Number: 10, Align: text.AlignRight}, // Mem Use
+		{Number: 11, Align: text.AlignRight}, // Mem %
+	})
+
+	t.AppendHeader(pt.Row{
+		"NODE", "STATUS", "VERSION",
+		"CPU REQ", "CPU LIM", "CPU USE", "CPU %",
+		"MEM REQ", "MEM LIM", "MEM USE", "MEM %",
+	})
+
+	// Add node rows
+	for _, name := range nodeNames {
+		v := (*nm)[name]
+
+		// Calculate utilization percentages
+		cpuPct := "--"
+		if v.AllocatableCPU != nil && v.UsageCPU != nil && v.AllocatableCPU.MilliValue() > 0 {
+			pct := float64(v.UsageCPU.MilliValue()) / float64(v.AllocatableCPU.MilliValue()) * 100
+			cpuPct = fmt.Sprintf("%.1f%%", pct)
+		}
+
+		memPct := "--"
+		if v.AllocatableMemory != nil && v.UsageMemory != nil && v.AllocatableMemory.Value() > 0 {
+			pct := float64(v.UsageMemory.Value()) / float64(v.AllocatableMemory.Value()) * 100
+			memPct = fmt.Sprintf("%.1f%%", pct)
+		}
+
+		// Format status with indicator
 		status := v.Status
 		if status == "" {
 			status = "Unknown"
 		}
 
 		t.AppendRow(pt.Row{
-			k,
+			name,
 			status,
 			v.NodeInfo.KubeletVersion,
 			formatQuantityValue(v.AllocatedCPUrequests),
 			formatQuantityValue(v.AllocatedCPULimits),
+			formatQuantity(v.UsageCPU),
+			cpuPct,
 			formatQuantityValue(v.AllocatedMemoryRequests),
 			formatQuantityValue(v.AllocatedMemoryLimits),
-			formatQuantity(v.UsageCPU),
 			formatQuantity(v.UsageMemory),
-			formatQuantity(v.AllocatableCPU),
-			formatQuantity(v.AllocatableMemory),
+			memPct,
 		})
+	}
+
+	// Add totals footer
+	totalCPUPct := "--"
+	if c.TotalAllocatableCPU != nil && c.TotalUsageCPU != nil && c.TotalAllocatableCPU.MilliValue() > 0 {
+		pct := float64(c.TotalUsageCPU.MilliValue()) / float64(c.TotalAllocatableCPU.MilliValue()) * 100
+		totalCPUPct = fmt.Sprintf("%.1f%%", pct)
+	}
+
+	totalMemPct := "--"
+	if c.TotalAllocatableMemory != nil && c.TotalUsageMemory != nil && c.TotalAllocatableMemory.Value() > 0 {
+		pct := float64(c.TotalUsageMemory.Value()) / float64(c.TotalAllocatableMemory.Value()) * 100
+		totalMemPct = fmt.Sprintf("%.1f%%", pct)
 	}
 
 	t.AppendSeparator()
 	t.AppendFooter(pt.Row{
 		"TOTALS",
-		"",
-		"",
-		formatQuantity(c.TotalAllocatedCPUrequests),
-		formatQuantity(c.TotalAllocatedCPULimits),
-		formatQuantity(c.TotalAllocatedMemoryRequests),
-		formatQuantity(c.TotalAllocatedMemoryLimits),
-		formatQuantity(c.TotalUsageCPU),
-		formatQuantity(c.TotalUsageMemory),
-		formatQuantity(c.TotalAllocatableCPU),
-		formatQuantity(c.TotalAllocatableMemory),
-	})
-
-	t.Render()
-	os.Exit(0)
-}
-
-func table(nm *NodeMap, c *Totals) {
-	t := pt.NewWriter()
-	t.Style().Options.DrawBorder = false
-	t.Style().Options.SeparateColumns = false
-	t.Style().Options.SeparateFooter = false
-	t.Style().Options.SeparateHeader = false
-	t.Style().Options.SeparateRows = false
-	t.SetOutputMirror(os.Stdout)
-	t.AppendHeader(pt.Row{
-		"Name", "Kubelet-Version", "ProviderID", "Allocated-CPU Req", "Allocated-CPU Lim",
-		"Allocated-MEM Req", "Allocated-MEM Lim", "Usage-CPU", "Usage-Mem", "Available-CPU", "Available-MEM",
-	})
-
-	for k, v := range *nm {
-		t.AppendRow([]interface{}{k, v.NodeInfo.KubeletVersion, v.ProviderID,
-			formatQuantityValue(v.AllocatedCPUrequests),
-			formatQuantityValue(v.AllocatedCPULimits),
-			formatQuantityValue(v.AllocatedMemoryRequests),
-			formatQuantityValue(v.AllocatedMemoryLimits),
-			formatQuantity(v.UsageCPU),
-			formatQuantity(v.UsageMemory),
-			formatQuantity(v.AllocatableCPU),
-			formatQuantity(v.AllocatableMemory)})
-	}
-
-	t.AppendFooter(pt.Row{
-		"Totals",
-		"",
+		fmt.Sprintf("%d nodes", len(*nm)),
 		"",
 		formatQuantity(c.TotalAllocatedCPUrequests),
 		formatQuantity(c.TotalAllocatedCPULimits),
+		formatQuantity(c.TotalUsageCPU),
+		totalCPUPct,
 		formatQuantity(c.TotalAllocatedMemoryRequests),
 		formatQuantity(c.TotalAllocatedMemoryLimits),
-		formatQuantity(c.TotalUsageCPU),
 		formatQuantity(c.TotalUsageMemory),
-		formatQuantity(c.TotalAllocatableCPU),
-		formatQuantity(c.TotalAllocatableMemory),
+		totalMemPct,
 	})
 
 	t.Render()
+
+	// Print capacity summary
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", 60))
+	fmt.Println("  CLUSTER CAPACITY")
+	fmt.Println(strings.Repeat("-", 60))
+	fmt.Printf("  Allocatable CPU:    %s\n", formatQuantity(c.TotalAllocatableCPU))
+	fmt.Printf("  Allocatable Memory: %s\n", formatQuantity(c.TotalAllocatableMemory))
+	fmt.Printf("  Total Capacity CPU: %s\n", formatQuantity(c.TotalCapacityCPU))
+	fmt.Printf("  Total Capacity Mem: %s\n", formatQuantity(c.TotalCapacityMemory))
+	fmt.Println(strings.Repeat("-", 60))
+	fmt.Println()
+
 	os.Exit(0)
 }
 

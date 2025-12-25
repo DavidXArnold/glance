@@ -69,14 +69,14 @@ cp target/kubectl-glance /usr/local/bin/
 ## Quick Start
 
 ```shell
-# View cluster resources (static snapshot)
+# View cluster resources (pretty output is now the default)
 kubectl glance
 
 # Start live monitoring with interactive TUI
 kubectl glance live
 
-# View with pretty colored output
-kubectl glance -o pretty
+# View with simple text output (no colors)
+kubectl glance -o txt
 
 # Monitor specific namespace pods in real-time
 kubectl glance live  # then press 'p' and use ←→ to navigate namespaces
@@ -111,8 +111,8 @@ Choose from multiple output formats to suit your workflow:
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| **Text** | `txt` (default) | Simple ASCII table output |
-| **Pretty** | `pretty` | Colorful table with styling and borders |
+| **Pretty** | `pretty` (default) | Colorful table with cluster summary, progress bars, and status icons |
+| **Text** | `txt` | Clean ASCII table with borders, utilization percentages, and capacity summary |
 | **JSON** | `json` | Machine-readable JSON for scripting/automation |
 | **Dashboard** | `dash` | Terminal dashboard with visual elements |
 | **Pie Chart** | `pie` | Resource allocation pie chart visualization |
@@ -120,8 +120,11 @@ Choose from multiple output formats to suit your workflow:
 
 **Examples:**
 ```shell
-# Pretty colored output
-kubectl glance -o pretty
+# Default pretty output with cluster summary and visual indicators
+kubectl glance
+
+# Simple text output with ASCII borders
+kubectl glance -o txt
 
 # JSON output for automation
 kubectl glance -o json | jq '.totals.totalUsageCPU'
@@ -164,8 +167,10 @@ kubectl glance live
 - 🎯 Four different view modes
 - ⌨️ Keyboard-driven navigation
 - 📊 Live resource metrics from metrics-server
-- 📊 Visual progress bars for resource utilization
-- 🎨 Clean, organized table display
+- 📊 Visual progress bars with color indicators (🟢🟡🔴)
+- 📈 Cluster summary dashboard showing aggregate stats
+- ✓ Status icons for nodes, pods, and deployments
+- 🎨 Color-coded rows based on utilization levels
 - 🎛️ Interactive toggles for display options
 - 📱 Terminal responsive
 
@@ -247,34 +252,38 @@ kubectl glance live
 
 #### Visual Example
 
-When progress bars are enabled, each resource metric displays a visual indicator:
+The live view now includes a cluster summary dashboard and color-coded progress bars:
 
 ```
-NAMESPACE    CPU REQ  CPU LIMIT  CPU USAGE  MEM REQ  MEM LIMIT  MEM USAGE  PODS
-production   2.5      4.0        1.8        4Gi      8Gi        3.2Gi      42
-             ██████░░  63%
-             ████████  100%
-             ████░░░░  45%
-             █████░░░  50%
-             ████████  100%
-             ████░░░░  40%
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ CLUSTER SUMMARY                                                              │
+│ CPU: 🟢 ████████░░░░░░░░ 45.2% (7.2/16 cores)  Nodes: ✓ 3 healthy          │
+│ MEM: 🟡 ██████████████░░ 72.5% (23.2/32 Gi)    Pods: 42 running            │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-development  1.0      2.0        0.5        2Gi      4Gi        1.5Gi      15
-             █████░░░  50%
-             ████████  100%
-             ██░░░░░░  25%
-             █████░░░  50%
-             ████████  100%
-             ████░░░░  38%
+NODE         STATUS      CPU CAP  CPU ALLOC  CPU USE  MEM CAP  MEM ALLOC  MEM USE  PODS
+node-1       ✓ Ready     4        2.5        1.8      8Gi      4Gi        3.2Gi    15
+             🟡 ████████████░░░░  45%
+             🟡 ██████████████░░  63%
+             🟢 ██████████░░░░░░  45%
+
+node-2       ✓ Ready     4        3.0        2.1      8Gi      6Gi        5.8Gi    18
+             🟡 ████████████████  75%
+             🔴 ██████████████████ 95%
+             🟡 ██████████████░░  73%
 ```
+
+**Color Indicators:**
+- 🟢 Green: < 50% utilization (healthy)
+- 🟡 Yellow: 50-90% utilization (warning)
+- 🔴 Red: > 90% utilization (critical)
+
+**Status Icons:**
+- ✓ Ready / ⊘ NotReady (nodes)
+- ● Running / ○ Pending / ✗ Failed (pods)
+- ✓ Ready / ✗ NotReady / ○ Partial (deployments)
 
 The bars use Unicode block characters (█ for filled, ░ for empty) to provide instant visual feedback on resource utilization.
-kubectl glance live --refresh 10
-
-# Quick workflow: Start live view, press 'p' for pods, use ←→ to browse namespaces
-kubectl glance live
-# (press 'p', then ← or → to navigate)
-```
 
 #### What Each View Shows
 
@@ -308,20 +317,36 @@ kubectl glance live
 
 Glance supports multiple output formats for different use cases:
 
-### Text Format (default)
-Basic ASCII table output, ideal for quick terminal views and scripting.
+### Text Format
+Clean ASCII table with borders, status column, utilization percentages, and cluster capacity summary. Ideal for environments without color support or for piping to other tools.
 
 ```shell
-kubectl glance
 kubectl glance -o txt
 ```
 
-### Pretty Format
-Colorful, styled tables with borders and highlighting for better readability in interactive terminal sessions.
+**Features:**
+- ASCII box borders for clear structure
+- Sorted node output for consistency
+- CPU % and MEM % utilization columns
+- Node status column (Ready/NotReady)
+- Cluster capacity summary section
+
+### Pretty Format (default)
+Full-featured colored output with cluster summary dashboard, progress bars, and status indicators. Best for interactive terminal sessions.
 
 ```shell
+kubectl glance
 kubectl glance -o pretty
 ```
+
+**Features:**
+- 📊 Cluster summary dashboard with aggregate CPU/memory stats
+- 📈 Visual progress bars with utilization percentages
+- 🟢🟡🔴 Color-coded indicators based on thresholds (<50% green, 50-90% yellow, >90% red)
+- ✓/⊘ Status icons for node health
+- 📉 Sparkline trend indicators
+- Grouped display (NotReady nodes shown first)
+- Color-coded utilization cells
 
 ### JSON Format
 Machine-readable JSON output perfect for automation, monitoring systems, and scripting.
@@ -630,6 +655,92 @@ go test ./pkg/cmd -run TestLive
 4. Add tests
 5. Run `make check`
 6. Submit a pull request
+
+### Releasing
+
+The project uses GitLab CI/CD to automate releases. Here's how to create a new release:
+
+#### Prerequisites
+
+- `GL_CI_TOKEN` CI/CD variable set in GitLab with write access to the repository
+- Version updated in `version/version.go`
+
+#### Manual Release (Local)
+
+```shell
+# 1. Update version in version/version.go
+vim version/version.go
+
+# 2. Build all platforms, create archives, generate checksums, update krew manifest
+make release
+
+# 3. Review the updated krew manifest
+cat plugins/krew/glance.yaml
+
+# 4. Commit and tag
+git add -A && git commit -m "Release v$(make release_version)"
+make tag-release
+git push && git push --tags
+
+# 5. Upload archives to GitLab release page
+# Files are in: target/archives/
+```
+
+#### Automated Release (CI/CD)
+
+Simply push a version tag to trigger the full release pipeline:
+
+```shell
+# 1. Update version in version/version.go and commit
+vim version/version.go
+git add -A && git commit -m "Prepare release v0.1.0"
+git push
+
+# 2. Create and push tag (triggers release)
+git tag v0.1.0
+git push --tags
+```
+
+The CI pipeline will automatically:
+1. Run lint and tests
+2. Build binaries for all platforms (darwin/linux amd64/arm64, windows amd64)
+3. Create `.tar.gz` archives
+4. Generate SHA256 checksums
+5. Create a GitLab Release with downloadable artifacts
+6. Update the krew manifest with new version and checksums
+7. Update the Homebrew formula
+
+#### Release Artifacts
+
+| Platform | Archive |
+|----------|---------|
+| macOS Intel | `kubectl-glance-VERSION-darwin-amd64.tar.gz` |
+| macOS Apple Silicon | `kubectl-glance-VERSION-darwin-arm64.tar.gz` |
+| Linux x86_64 | `kubectl-glance-VERSION-linux-amd64.tar.gz` |
+| Linux ARM64 | `kubectl-glance-VERSION-linux-arm64.tar.gz` |
+| Windows x86_64 | `kubectl-glance-VERSION-windows-amd64.tar.gz` |
+
+#### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make build-all` | Build binaries for all platforms |
+| `make archive-all` | Create archives (depends on build-all) |
+| `make checksums` | Generate SHA256 checksums (depends on archive-all) |
+| `make krew-plugin` | Update krew manifest with checksums (depends on checksums) |
+| `make release` | Full release pipeline (build → archive → checksum → manifest) |
+| `make krew-validate` | Test krew manifest locally |
+| `make krew-reset` | Reset krew manifest to git version |
+| `make clean` | Remove build artifacts |
+
+#### Submitting to Krew Index
+
+After creating a release:
+
+1. Fork [kubernetes-sigs/krew-index](https://github.com/kubernetes-sigs/krew-index)
+2. Copy `plugins/krew/glance.yaml` to `plugins/glance.yaml` in your fork
+3. Submit a PR to the krew-index repository
+4. Wait for review and approval
 
 ## License
 
