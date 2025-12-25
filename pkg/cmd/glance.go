@@ -101,7 +101,7 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		labelSelector, "selector", "",
 		"Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
 	cmd.PersistentFlags().StringVarP(
-		output, "output", "o", "txt",
+		output, "output", "o", "pretty",
 		"Output format. One of: txt|pretty|json|dash|pie|chart")
 	cmd.PersistentFlags().BoolVarP(
 		cloudInfo, "cloud-info", "c", false,

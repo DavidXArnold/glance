@@ -45,6 +45,23 @@ const (
 	checkboxChecked   = "☑"
 	checkboxUnchecked = "☐"
 	defaultNamespace  = "default"
+
+	// Status icons
+	statusReady    = "✓"
+	statusNotReady = "⊘"
+	statusRunning  = "●"
+	statusPending  = "○"
+	statusFailed   = "✗"
+
+	// Status text labels
+	nodeStatusReady    = "Ready"
+	nodeStatusNotReady = "NotReady"
+
+	// Progress bar thresholds
+	thresholdLow      = 50.0
+	thresholdMedium   = 75.0
+	thresholdHigh     = 90.0
+	thresholdCritical = 100.0
 )
 
 // ResourceMetrics holds the resource values and capacity for progress bars
@@ -229,10 +246,15 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		data = addProgressBars(data, metrics, state.showPercentages)
 	}
 
-	// Calculate table height based on compact mode
-	tableHeight := termHeight - 6
+	// Calculate summary stats
+	summaryStats := calculateSummaryStats(metrics)
+
+	// Calculate table height based on compact mode (leave room for summary)
+	summaryHeight := 3
+	tableHeight := termHeight - 6 - summaryHeight
 	if state.compactMode {
 		tableHeight = termHeight - 5
+		summaryHeight = 0
 	}
 
 	// Update table
@@ -240,8 +262,16 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	state.table.TextStyle = ui.NewStyle(ui.ColorWhite)
 	state.table.RowSeparator = false
 	state.table.BorderStyle = ui.NewStyle(ui.ColorCyan)
-	state.table.SetRect(0, 0, termWidth, tableHeight)
+	state.table.SetRect(0, summaryHeight, termWidth, tableHeight+summaryHeight)
 	state.table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
+
+	// Apply row coloring based on utilization
+	applyRowColors(state.table, metrics, state.showBars)
+
+	// Render summary bar at the top (if not compact)
+	if !state.compactMode {
+		renderSummaryBar(summaryStats, termWidth)
+	}
 
 	// Update status bar
 	modeStr := getModeString(state.mode)
@@ -252,17 +282,17 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		modeStr,
 		state.lastUpdate.Format("15:04:05"),
 		state.refreshInterval,
-		len(data))
+		len(data)/getRowMultiplier(state.showBars))
 	state.statusBar.Border = false
-	state.statusBar.SetRect(0, tableHeight, termWidth, tableHeight+2)
+	state.statusBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+2)
 
 	// Update menu bar with toggles
 	state.menuBar.Text = getMenuBar(state)
-	state.menuBar.SetRect(0, tableHeight+2, termWidth, tableHeight+3)
+	state.menuBar.SetRect(0, tableHeight+summaryHeight+2, termWidth, tableHeight+summaryHeight+3)
 
 	// Update help bar
 	if !state.compactMode {
-		state.helpBar.SetRect(0, tableHeight+3, termWidth, termHeight)
+		state.helpBar.SetRect(0, tableHeight+summaryHeight+3, termWidth, termHeight)
 	}
 
 	if state.compactMode {
@@ -271,6 +301,168 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		ui.Render(state.table, state.statusBar, state.menuBar, state.helpBar)
 	}
 	return nil
+}
+
+// SummaryStats holds aggregate statistics for the summary bar
+type SummaryStats struct {
+	TotalItems    int
+	AvgCPUUsage   float64
+	AvgMemUsage   float64
+	MaxCPUUsage   float64
+	MaxMemUsage   float64
+	CriticalCount int
+	WarningCount  int
+	HealthyCount  int
+}
+
+// calculateSummaryStats computes aggregate statistics from metrics
+func calculateSummaryStats(metrics []ResourceMetrics) SummaryStats {
+	stats := SummaryStats{TotalItems: len(metrics)}
+	if len(metrics) == 0 {
+		return stats
+	}
+
+	var totalCPU, totalMem float64
+	for _, m := range metrics {
+		cpuPct := safePercentage(m.CPUUsage, m.CPUCapacity)
+		memPct := safePercentage(m.MemUsage, m.MemCapacity)
+
+		totalCPU += cpuPct
+		totalMem += memPct
+
+		if cpuPct > stats.MaxCPUUsage {
+			stats.MaxCPUUsage = cpuPct
+		}
+		if memPct > stats.MaxMemUsage {
+			stats.MaxMemUsage = memPct
+		}
+
+		maxPct := cpuPct
+		if memPct > maxPct {
+			maxPct = memPct
+		}
+
+		switch {
+		case maxPct >= thresholdHigh:
+			stats.CriticalCount++
+		case maxPct >= thresholdMedium:
+			stats.WarningCount++
+		default:
+			stats.HealthyCount++
+		}
+	}
+
+	stats.AvgCPUUsage = totalCPU / float64(len(metrics))
+	stats.AvgMemUsage = totalMem / float64(len(metrics))
+
+	return stats
+}
+
+// renderSummaryBar renders a summary bar at the top of the screen
+func renderSummaryBar(stats SummaryStats, width int) {
+	summary := widgets.NewParagraph()
+	summary.Border = true
+	summary.BorderStyle = ui.NewStyle(ui.ColorCyan)
+	summary.Title = " 🔍 Cluster Summary "
+	summary.TitleStyle = ui.NewStyle(ui.ColorCyan, ui.ColorBlack, ui.ModifierBold)
+
+	// Build summary text with status indicators
+	healthIcon := fmt.Sprintf("[%s %d](fg:green)", statusReady, stats.HealthyCount)
+	warnIcon := fmt.Sprintf("[%s %d](fg:yellow)", statusPending, stats.WarningCount)
+	critIcon := fmt.Sprintf("[%s %d](fg:red)", statusNotReady, stats.CriticalCount)
+
+	cpuBar := makeColoredBar(stats.AvgCPUUsage, 15)
+	memBar := makeColoredBar(stats.AvgMemUsage, 15)
+
+	summary.Text = fmt.Sprintf(
+		" Status: %s %s %s │ CPU: %s %.0f%% │ Mem: %s %.0f%%",
+		healthIcon, warnIcon, critIcon,
+		cpuBar, stats.AvgCPUUsage,
+		memBar, stats.AvgMemUsage,
+	)
+
+	summary.SetRect(0, 0, width, 3)
+	ui.Render(summary)
+}
+
+// makeColoredBar creates a colored progress bar string for termui
+func makeColoredBar(percentage float64, width int) string {
+	if percentage > 100 {
+		percentage = 100
+	}
+	if percentage < 0 {
+		percentage = 0
+	}
+
+	filled := int((percentage / 100) * float64(width))
+	empty := width - filled
+
+	var color string
+	switch {
+	case percentage >= thresholdHigh:
+		color = "red"
+	case percentage >= thresholdMedium:
+		color = "yellow"
+	case percentage >= thresholdLow:
+		color = "yellow"
+	default:
+		color = "green"
+	}
+
+	filledStr := ""
+	for i := 0; i < filled; i++ {
+		filledStr += "█"
+	}
+	emptyStr := ""
+	for i := 0; i < empty; i++ {
+		emptyStr += "░"
+	}
+
+	return fmt.Sprintf("[%s](fg:%s)[%s](fg:black)", filledStr, color, emptyStr)
+}
+
+// applyRowColors applies color coding to table rows based on utilization
+func applyRowColors(table *widgets.Table, metrics []ResourceMetrics, showBars bool) {
+	multiplier := getRowMultiplier(showBars)
+
+	for i, m := range metrics {
+		rowIdx := (i * multiplier) + 1 // +1 for header
+
+		cpuPct := safePercentage(m.CPUUsage, m.CPUCapacity)
+		memPct := safePercentage(m.MemUsage, m.MemCapacity)
+		maxPct := cpuPct
+		if memPct > maxPct {
+			maxPct = memPct
+		}
+
+		var style ui.Style
+		switch {
+		case maxPct >= thresholdHigh:
+			style = ui.NewStyle(ui.ColorRed)
+		case maxPct >= thresholdMedium:
+			style = ui.NewStyle(ui.ColorYellow)
+		default:
+			style = ui.NewStyle(ui.ColorWhite)
+		}
+
+		table.RowStyles[rowIdx] = style
+	}
+}
+
+// getRowMultiplier returns 2 if progress bars are shown (data + bar rows), 1 otherwise
+func getRowMultiplier(showBars bool) int {
+	if showBars {
+		return 2
+	}
+	return 1
+}
+
+// safePercentage calculates percentage safely handling zero capacity
+func safePercentage(value, capacity float64) float64 {
+	if capacity == 0 {
+		return 0
+	}
+	return (value / capacity) * 100
 }
 
 func fetchNamespaceData(
@@ -425,6 +617,10 @@ func fetchPodData(
 			}
 		}
 
+		// Format status with icon
+		podStatus := string(pod.Status.Phase)
+		statusIcon := getStatusIcon(podStatus)
+
 		rows = append(rows, []string{
 			pod.Name,
 			formatMilliCPU(cpuReq),
@@ -433,7 +629,7 @@ func fetchPodData(
 			formatBytes(memReq),
 			formatBytes(memLimit),
 			formatBytes(memUsage),
-			string(pod.Status.Phase),
+			statusIcon + podStatus,
 		})
 
 		metrics = append(metrics, ResourceMetrics{
@@ -456,7 +652,7 @@ func fetchNodeData(
 	k8sClient *kubernetes.Clientset,
 	gc *GlanceConfig,
 ) ([]string, [][]string, []ResourceMetrics, error) {
-	header := []string{"NODE", "CPU CAP", "CPU ALLOC", "CPU USAGE", "MEM CAP", "MEM ALLOC", "MEM USAGE", "PODS"}
+	header := []string{"NODE", "STATUS", "CPU CAP", "CPU ALLOC", "CPU USAGE", "MEM CAP", "MEM ALLOC", "MEM USAGE", "PODS"}
 
 	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -479,6 +675,19 @@ func fetchNodeData(
 	var rows [][]string
 	var metrics []ResourceMetrics
 	for _, node := range nodes.Items {
+		// Get node status
+		nodeStatus := "Unknown"
+		for _, condition := range node.Status.Conditions {
+			if condition.Type == v1.NodeReady {
+				if condition.Status == v1.ConditionTrue {
+					nodeStatus = statusReady + " " + nodeStatusReady
+				} else {
+					nodeStatus = statusNotReady + " " + nodeStatusNotReady
+				}
+				break
+			}
+		}
+
 		cpuCap := node.Status.Capacity.Cpu()
 		memCap := node.Status.Capacity.Memory()
 		cpuAlloc := resource.NewMilliQuantity(0, resource.DecimalSI)
@@ -512,6 +721,7 @@ func fetchNodeData(
 
 		rows = append(rows, []string{
 			node.Name,
+			nodeStatus,
 			formatMilliCPU(cpuCap),
 			formatMilliCPU(cpuAlloc),
 			formatMilliCPU(cpuUsage),
@@ -541,7 +751,10 @@ func fetchDeploymentData(
 	k8sClient *kubernetes.Clientset,
 	namespace string,
 ) ([]string, [][]string, []ResourceMetrics, error) {
-	header := []string{"DEPLOYMENT", "CPU REQ", "CPU LIMIT", "MEM REQ", "MEM LIMIT", "REPLICAS", "READY", "AVAILABLE"}
+	header := []string{
+		"DEPLOYMENT", "STATUS", "CPU REQ", "CPU LIMIT", "MEM REQ", "MEM LIMIT",
+		"REPLICAS", "READY", "AVAILABLE",
+	}
 
 	deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -582,8 +795,19 @@ func fetchDeploymentData(
 		memReq = multiplyQuantity(memReq, int(replicas))
 		memLimit = multiplyQuantity(memLimit, int(replicas))
 
+		// Determine deployment status
+		deployStatus := statusReady + " " + nodeStatusReady
+		if deploy.Status.ReadyReplicas < replicas {
+			if deploy.Status.ReadyReplicas == 0 {
+				deployStatus = statusFailed + " " + nodeStatusNotReady
+			} else {
+				deployStatus = statusPending + " Partial"
+			}
+		}
+
 		rows = append(rows, []string{
 			deploy.Name,
+			deployStatus,
 			formatMilliCPU(cpuReq),
 			formatMilliCPU(cpuLimit),
 			formatBytes(memReq),
@@ -792,7 +1016,7 @@ func addProgressBars(data [][]string, metrics []ResourceMetrics, showPercentages
 	return result
 }
 
-// makeProgressBar creates a visual progress bar
+// makeProgressBar creates a visual progress bar with color indicator
 func makeProgressBar(value, max float64, width int, showPercentage bool) string {
 	if max == 0 {
 		if showPercentage {
@@ -811,6 +1035,9 @@ func makeProgressBar(value, max float64, width int, showPercentage bool) string 
 		filled = width
 	}
 
+	// Color indicator based on percentage
+	colorIndicator := getColorIndicator(percentage)
+
 	bar := ""
 	// Use block characters for a smooth gradient effect
 	for i := 0; i < width; i++ {
@@ -822,7 +1049,39 @@ func makeProgressBar(value, max float64, width int, showPercentage bool) string 
 	}
 
 	if showPercentage {
-		return fmt.Sprintf("%s %3.0f%%", bar, percentage)
+		return fmt.Sprintf("%s%s %3.0f%%", colorIndicator, bar, percentage)
 	}
-	return bar
+	return colorIndicator + bar
+}
+
+// getColorIndicator returns a color indicator character based on percentage
+func getColorIndicator(percentage float64) string {
+	switch {
+	case percentage >= thresholdHigh:
+		return "🔴"
+	case percentage >= thresholdMedium:
+		return "🟡"
+	case percentage >= thresholdLow:
+		return "🟢"
+	default:
+		return "🟢"
+	}
+}
+
+// getStatusIcon returns an appropriate status icon for a given status string
+func getStatusIcon(status string) string {
+	switch status {
+	case "Running":
+		return statusRunning + " "
+	case "Pending":
+		return statusPending + " "
+	case "Failed", "Error", "CrashLoopBackOff":
+		return statusFailed + " "
+	case nodeStatusReady:
+		return statusReady + " "
+	case nodeStatusNotReady:
+		return statusNotReady + " "
+	default:
+		return ""
+	}
 }

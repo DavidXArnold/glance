@@ -2,102 +2,172 @@
 default:
   image: golang:1.25
 
+variables:
+  PACKAGE: gitlab.com/davidxarnold/glance
+  APPLICATION: kubectl-glance
+
 stages:
 - lint
 - test
 - build
-- build-darwin
-- tag
+- release
 
-test:
-  stage: test
-  script:
-  - make test
-
+# Run on all branches
 lint:
   stage: lint
   image: docker:29
   services:
   - docker:29-dind
   variables:
-    CONTAINER_REGISTRY: "registry.gitlab.com/davidxarnold"
     DOCKER_DRIVER: overlay2
     DOCKER_TLS_CERTDIR: "/certs"
   script:
   - apk add make
   - make lint
 
+test:
+  stage: test
+  script:
+  - make test
+
+# Build all platform binaries
 build:
   stage: build
-  before_script:
-  - git config --global user.email "${GITLAB_USER_EMAIL}"
-  - git config --global user.name "${GITLAB_USER_NAME}"
   script:
-  - make build
-  - make archive
-  - git checkout -b ci_processing_krew
-  - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') REF=${CI_JOB_ID} make krew-plugin
-  - git commit -am "update krew plugin"
-  - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
+  - make build-all
+  - make archive-all
+  - make checksums
   artifacts:
     paths:
-    - target/kubectl-glance
-  only:
-  - master
+    - target/archives/
+    - target/release/
+    expire_in: 1 week
 
-build-darwin:
-  stage: build
-  variables:
-    GOOS: darwin
+# Create GitLab Release with all artifacts (only on tags)
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+  - job: build
+    artifacts: true
+  rules:
+  - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  script:
+  - echo "Creating release for ${CI_COMMIT_TAG}"
+  - cat target/archives/checksums.txt
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Release $CI_COMMIT_TAG"
+    description: |
+      ## Glance $CI_COMMIT_TAG
+
+      ### Installation
+
+      **Krew (recommended):**
+      ```shell
+      kubectl krew install glance
+      ```
+
+      **Manual:**
+      Download the appropriate archive for your platform below and extract `kubectl-glance` to your PATH.
+
+      ### Checksums
+      See `checksums.txt` artifact for SHA256 hashes.
+    assets:
+      links:
+      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-darwin-amd64.tar.gz"
+        url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/target/archives/kubectl-glance-${CI_COMMIT_TAG#v}-darwin-amd64.tar.gz"
+        filepath: "/kubectl-glance-${CI_COMMIT_TAG#v}-darwin-amd64.tar.gz"
+      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-darwin-arm64.tar.gz"
+        url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/target/archives/kubectl-glance-${CI_COMMIT_TAG#v}-darwin-arm64.tar.gz"
+        filepath: "/kubectl-glance-${CI_COMMIT_TAG#v}-darwin-arm64.tar.gz"
+      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-linux-amd64.tar.gz"
+        url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/target/archives/kubectl-glance-${CI_COMMIT_TAG#v}-linux-amd64.tar.gz"
+        filepath: "/kubectl-glance-${CI_COMMIT_TAG#v}-linux-amd64.tar.gz"
+      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-linux-arm64.tar.gz"
+        url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/target/archives/kubectl-glance-${CI_COMMIT_TAG#v}-linux-arm64.tar.gz"
+        filepath: "/kubectl-glance-${CI_COMMIT_TAG#v}-linux-arm64.tar.gz"
+      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-windows-amd64.tar.gz"
+        url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/target/archives/kubectl-glance-${CI_COMMIT_TAG#v}-windows-amd64.tar.gz"
+        filepath: "/kubectl-glance-${CI_COMMIT_TAG#v}-windows-amd64.tar.gz"
+      - name: "checksums.txt"
+        url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/target/archives/checksums.txt"
+        filepath: "/checksums.txt"
+
+# Update krew manifest and push to repo (only on tags)
+update-krew-manifest:
+  stage: release
+  needs:
+  - job: build
+    artifacts: true
+  rules:
+  - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
   before_script:
   - git config --global user.email "${GITLAB_USER_EMAIL}"
   - git config --global user.name "${GITLAB_USER_NAME}"
+  - apt-get update && apt-get install -y jq
   script:
-  - git pull
-  - make build
-  - make archive
-  - git checkout -b ci_processing
-  - ls -alt ./archive
-  - ARCHIVE_SHA=$(shasum -a 256 ./archive/kubectl-glance* | awk '{print $1}') REF=${CI_JOB_ID} make formula
-  - git commit -am "update formula"
-  - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
+  - |
+    VERSION=${CI_COMMIT_TAG#v}
+    echo "Updating krew manifest for version ${VERSION}"
+
+    # Get checksums
+    SHA_DARWIN_AMD64=$(grep darwin-amd64 target/archives/checksums.txt | cut -d' ' -f1)
+    SHA_DARWIN_ARM64=$(grep darwin-arm64 target/archives/checksums.txt | cut -d' ' -f1)
+    SHA_LINUX_AMD64=$(grep linux-amd64 target/archives/checksums.txt | cut -d' ' -f1)
+    SHA_LINUX_ARM64=$(grep linux-arm64 target/archives/checksums.txt | cut -d' ' -f1)
+    SHA_WINDOWS_AMD64=$(grep windows-amd64 target/archives/checksums.txt | cut -d' ' -f1)
+
+    echo "Checksums:"
+    echo "  darwin-amd64:  ${SHA_DARWIN_AMD64}"
+    echo "  darwin-arm64:  ${SHA_DARWIN_ARM64}"
+    echo "  linux-amd64:   ${SHA_LINUX_AMD64}"
+    echo "  linux-arm64:   ${SHA_LINUX_ARM64}"
+    echo "  windows-amd64: ${SHA_WINDOWS_AMD64}"
+
+    # Update manifest
+    sed -i "s#version: \"[^\"]*\"#version: \"${VERSION}\"#" plugins/krew/glance.yaml
+    sed -i "s#v[0-9]*\.[0-9]*\.[0-9]*#v${VERSION}#g" plugins/krew/glance.yaml
+    sed -i "s#PLACEHOLDER_SHA256_DARWIN_AMD64#${SHA_DARWIN_AMD64}#" plugins/krew/glance.yaml
+    sed -i "s#PLACEHOLDER_SHA256_DARWIN_ARM64#${SHA_DARWIN_ARM64}#" plugins/krew/glance.yaml
+    sed -i "s#PLACEHOLDER_SHA256_LINUX_AMD64#${SHA_LINUX_AMD64}#" plugins/krew/glance.yaml
+    sed -i "s#PLACEHOLDER_SHA256_LINUX_ARM64#${SHA_LINUX_ARM64}#" plugins/krew/glance.yaml
+    sed -i "s#PLACEHOLDER_SHA256_WINDOWS_AMD64#${SHA_WINDOWS_AMD64}#" plugins/krew/glance.yaml
+
+    # Also update any existing checksums (for re-releases)
+    sed -i "s#sha256: \"[a-f0-9]*\"#sha256: \"PLACEHOLDER\"#g" plugins/krew/glance.yaml
+    sed -i "s#PLACEHOLDER.*darwin-amd64#${SHA_DARWIN_AMD64}#" plugins/krew/glance.yaml || true
+
+    cat plugins/krew/glance.yaml
+
+    # Commit and push
+    git add plugins/krew/glance.yaml
+    git commit -m "chore: update krew manifest for ${CI_COMMIT_TAG}" || echo "No changes to commit"
+    git push -o ci.skip "https://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}
   artifacts:
     paths:
-    - "archive/kubectl-glance*"
-  only:
-  - master
+    - plugins/krew/glance.yaml
+    expire_in: 1 week
 
-tag:
-  stage: tag
+# Optional: Update Homebrew formula (only on tags)
+update-formula:
+  stage: release
+  needs:
+  - job: build
+    artifacts: true
+  rules:
+  - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
   before_script:
   - git config --global user.email "${GITLAB_USER_EMAIL}"
   - git config --global user.name "${GITLAB_USER_NAME}"
   script:
-  - git pull
-  - git checkout -b tag-release
-  - make tag-release
-  - git push -o ci.skip http://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/davidxarnold/glance.git HEAD:master
-  only:
-  - master
+  - |
+    VERSION=${CI_COMMIT_TAG#v}
+    SHA_DARWIN_AMD64=$(grep darwin-amd64 target/archives/checksums.txt | cut -d' ' -f1)
 
-# container:
-#   stage: container
-#   image: docker:29
-#   services:
-#     - docker:29-dind
-#   variables:
-#     CONTAINER_REGISTRY: "registry.gitlab.com/davidxarnold"
-#     DOCKER_DRIVER: overlay2
-#     DOCKER_TLS_CERTDIR: "/certs"
-#   script:
-#     - apk add make git
-#     - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} registry.gitlab.com
-#     - make container
-#     - docker tag glance:${CI_COMMIT_SHORT_SHA} ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:${CI_COMMIT_SHORT_SHA}
-#     - docker push ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:${CI_COMMIT_SHORT_SHA}
-#     - if [[ "$CI_COMMIT_REF_NAME" == "master" ]]; then
-#         docker tag glance:${CI_COMMIT_SHORT_SHA} ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:latest;
-#         docker push ${CONTAINER_REGISTRY}/${CI_PROJECT_NAME}/glance:latest;
-#       else
-#         echo "Skipping creating latest tag. Not master branch";
-#       fi
+    sed -i "s#sha256 \"[^\"]*\"#sha256 \"${SHA_DARWIN_AMD64}\"#" Formula/glance.rb
+    sed -i "s#version \"[^\"]*\"#version \"${VERSION}\"#" Formula/glance.rb
+
+    git add Formula/glance.rb
+    git commit -m "chore: update homebrew formula for ${CI_COMMIT_TAG}" || echo "No changes to commit"
+    git push -o ci.skip "https://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}

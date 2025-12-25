@@ -19,8 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const nodeStatusReady = "Ready"
-
 func TestNodeMapCreation(t *testing.T) {
 	nm := make(NodeMap)
 
@@ -109,8 +107,8 @@ func TestNodeMapAccess(t *testing.T) {
 		t.Errorf("Failed to retrieve node from NodeMap")
 	}
 
-	if nm["test-node"].Status != "Ready" {
-		t.Errorf("Retrieved node status = %q, want %q", nm["test-node"].Status, "Ready")
+	if nm["test-node"].Status != nodeStatusReady {
+		t.Errorf("Retrieved node status = %q, want %q", nm["test-node"].Status, nodeStatusReady)
 	}
 
 	if nm["nonexistent"] != nil {
