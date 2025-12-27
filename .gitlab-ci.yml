@@ -81,48 +81,32 @@ release:
   rules:
   - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
   script:
-  - echo "Creating release for ${CI_COMMIT_TAG}"
-  variables:
-    VERSION: "${CI_COMMIT_TAG#v}"
-    PKG_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance"
-  release:
-    tag_name: $CI_COMMIT_TAG
-    name: "Release $CI_COMMIT_TAG"
-    description: |
-      ## Glance $CI_COMMIT_TAG
+  - |
+    VERSION="${CI_COMMIT_TAG#v}"
+    echo "Creating release for ${CI_COMMIT_TAG} (version ${VERSION})"
+    release-cli create \
+      --name "Release ${CI_COMMIT_TAG}" \
+      --tag-name "${CI_COMMIT_TAG}" \
+      --description "## Glance ${CI_COMMIT_TAG}
 
-      ### Installation
+    ### Installation
 
-      **Krew (recommended):**
-      ```shell
-      kubectl krew install glance
-      ```
+    **Krew (recommended):**
+    \`\`\`shell
+    kubectl krew install glance
+    \`\`\`
 
-      **Manual:**
-      Download the appropriate archive for your platform below and extract `kubectl-glance` to your PATH.
+    **Manual:**
+    Download the appropriate archive for your platform below and extract \`kubectl-glance\` to your PATH.
 
-      ### Checksums
-      See checksums.txt for SHA256 hashes.
-    assets:
-      links:
-      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-darwin-amd64.tar.gz"
-        url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${CI_COMMIT_TAG#v}/kubectl-glance-${CI_COMMIT_TAG#v}-darwin-amd64.tar.gz"
-        link_type: package
-      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-darwin-arm64.tar.gz"
-        url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${CI_COMMIT_TAG#v}/kubectl-glance-${CI_COMMIT_TAG#v}-darwin-arm64.tar.gz"
-        link_type: package
-      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-linux-amd64.tar.gz"
-        url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${CI_COMMIT_TAG#v}/kubectl-glance-${CI_COMMIT_TAG#v}-linux-amd64.tar.gz"
-        link_type: package
-      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-linux-arm64.tar.gz"
-        url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${CI_COMMIT_TAG#v}/kubectl-glance-${CI_COMMIT_TAG#v}-linux-arm64.tar.gz"
-        link_type: package
-      - name: "kubectl-glance-${CI_COMMIT_TAG#v}-windows-amd64.tar.gz"
-        url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${CI_COMMIT_TAG#v}/kubectl-glance-${CI_COMMIT_TAG#v}-windows-amd64.tar.gz"
-        link_type: package
-      - name: "checksums.txt"
-        url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${CI_COMMIT_TAG#v}/checksums.txt"
-        link_type: other
+    ### Checksums
+    See checksums.txt for SHA256 hashes." \
+      --assets-link "{\"name\":\"kubectl-glance-${VERSION}-darwin-amd64.tar.gz\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${VERSION}/kubectl-glance-${VERSION}-darwin-amd64.tar.gz\",\"link_type\":\"package\"}" \
+      --assets-link "{\"name\":\"kubectl-glance-${VERSION}-darwin-arm64.tar.gz\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${VERSION}/kubectl-glance-${VERSION}-darwin-arm64.tar.gz\",\"link_type\":\"package\"}" \
+      --assets-link "{\"name\":\"kubectl-glance-${VERSION}-linux-amd64.tar.gz\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${VERSION}/kubectl-glance-${VERSION}-linux-amd64.tar.gz\",\"link_type\":\"package\"}" \
+      --assets-link "{\"name\":\"kubectl-glance-${VERSION}-linux-arm64.tar.gz\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${VERSION}/kubectl-glance-${VERSION}-linux-arm64.tar.gz\",\"link_type\":\"package\"}" \
+      --assets-link "{\"name\":\"kubectl-glance-${VERSION}-windows-amd64.tar.gz\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${VERSION}/kubectl-glance-${VERSION}-windows-amd64.tar.gz\",\"link_type\":\"package\"}" \
+      --assets-link "{\"name\":\"checksums.txt\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kubectl-glance/${VERSION}/checksums.txt\",\"link_type\":\"other\"}"
 
 # Update krew manifest and push to repo (only on tags)
 update-krew-manifest:
