@@ -105,7 +105,7 @@ checksums: archive-all
 krew-plugin: checksums
 	@echo "Updating krew plugin manifest..."
 	@cp plugins/krew/glance.yaml plugins/krew/glance.yaml.bak
-	$(SED) "s#\(version: \)\"[^\"]*\"#\1\"$(RELEASE_VERSION)\"#" plugins/krew/glance.yaml
+	$(SED) "s#\(version: \)\"[^\"]*\"#\1\"v$(RELEASE_VERSION)\"#" plugins/krew/glance.yaml
 	$(SED) "s#v[0-9]*\.[0-9]*\.[0-9]*#v$(RELEASE_VERSION)#g" plugins/krew/glance.yaml
 	$(eval SHA_DARWIN_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-darwin-amd64.tar.gz | cut -d' ' -f1))
 	$(eval SHA_DARWIN_ARM64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-darwin-arm64.tar.gz | cut -d' ' -f1))
