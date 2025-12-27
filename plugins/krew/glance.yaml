@@ -34,7 +34,7 @@ spec:
       matchLabels:
         os: darwin
         arch: amd64
-    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.1.0/downloads/kubectl-glance--darwin-amd64.tar.gz"
+    uri: "https://gitlab.com/api/v4/projects/63716630/packages/generic/kubectl-glance/0.1.0/kubectl-glance-0.1.0-darwin-amd64.tar.gz"
     sha256: "5e70e4e4869336e960af16cea1c143d5302e91ee4066f2027c4b399ab7e7d2ea"
     bin: "kubectl-glance"
     files:
@@ -44,7 +44,7 @@ spec:
       matchLabels:
         os: darwin
         arch: arm64
-    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.1.0/downloads/kubectl-glance--darwin-arm64.tar.gz"
+    uri: "https://gitlab.com/api/v4/projects/63716630/packages/generic/kubectl-glance/0.1.0/kubectl-glance-0.1.0-darwin-arm64.tar.gz"
     sha256: "0cfdd72a884a931854b8481c9ac7f731e741fcb98631a3699a34fefc9a768696"
     bin: "kubectl-glance"
     files:
@@ -54,7 +54,7 @@ spec:
       matchLabels:
         os: linux
         arch: amd64
-    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.1.0/downloads/kubectl-glance--linux-amd64.tar.gz"
+    uri: "https://gitlab.com/api/v4/projects/63716630/packages/generic/kubectl-glance/0.1.0/kubectl-glance-0.1.0-linux-amd64.tar.gz"
     sha256: "a51bce39902143188763dfeb3f0304e6c34fee48f064b8d9e59263490eb6abd1"
     bin: "kubectl-glance"
     files:
@@ -64,7 +64,7 @@ spec:
       matchLabels:
         os: linux
         arch: arm64
-    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.1.0/downloads/kubectl-glance--linux-arm64.tar.gz"
+    uri: "https://gitlab.com/api/v4/projects/63716630/packages/generic/kubectl-glance/0.1.0/kubectl-glance-0.1.0-linux-arm64.tar.gz"
     sha256: "8c94ede70f31af104a09fd5831383b93b9e036aefdd1ed7d2060ed2feca976ec"
     bin: "kubectl-glance"
     files:
@@ -74,7 +74,7 @@ spec:
       matchLabels:
         os: windows
         arch: amd64
-    uri: "https://gitlab.com/davidxarnold/glance/-/releases/v0.1.0/downloads/kubectl-glance--windows-amd64.tar.gz"
+    uri: "https://gitlab.com/api/v4/projects/63716630/packages/generic/kubectl-glance/0.1.0/kubectl-glance-0.1.0-windows-amd64.tar.gz"
     sha256: "058de850a2d05fb3e64c95c6ddf51764fb25fa8e3b1ccec00bd666911d630020"
     bin: "kubectl-glance.exe"
     files:
