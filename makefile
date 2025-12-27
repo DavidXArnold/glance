@@ -1,7 +1,8 @@
 ARCH?=amd64
 GO_VERSION?=1.25
 GIT_VERSION := $(shell git describe --tags --always --abbrev=8)
-RELEASE_VERSION := $(shell sed -nE 's/^var[[:space:]]Version[[:space:]]=[[:space:]]"([^"]+)".*/\1/p' version/version.go)
+# Allow CI to override version via CI_COMMIT_TAG, otherwise extract from version.go
+RELEASE_VERSION ?= $(shell grep 'var Version' version/version.go | cut -d'"' -f2)
 PACKAGE := gitlab.com/davidxarnold/glance
 APPLICATION?=kubectl-glance
 NOW := $(shell date +'%s')
@@ -104,19 +105,25 @@ checksums: archive-all
 # Update krew manifest with version and checksums (Step 3)
 krew-plugin: checksums
 	@echo "Updating krew plugin manifest..."
-	@cp plugins/krew/glance.yaml plugins/krew/glance.yaml.bak
-	$(SED) "s#\(version: \)\"[^\"]*\"#\1\"v$(RELEASE_VERSION)\"#" plugins/krew/glance.yaml
-	$(SED) "s#v[0-9]*\.[0-9]*\.[0-9]*#v$(RELEASE_VERSION)#g" plugins/krew/glance.yaml
+	@echo "RELEASE_VERSION = $(RELEASE_VERSION)"
 	$(eval SHA_DARWIN_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-darwin-amd64.tar.gz | cut -d' ' -f1))
 	$(eval SHA_DARWIN_ARM64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-darwin-arm64.tar.gz | cut -d' ' -f1))
 	$(eval SHA_LINUX_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-linux-amd64.tar.gz | cut -d' ' -f1))
 	$(eval SHA_LINUX_ARM64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-linux-arm64.tar.gz | cut -d' ' -f1))
 	$(eval SHA_WINDOWS_AMD64 := $(shell shasum -a 256 target/archives/kubectl-glance-$(RELEASE_VERSION)-windows-amd64.tar.gz | cut -d' ' -f1))
-	$(SED) "s#PLACEHOLDER_SHA256_DARWIN_AMD64#$(SHA_DARWIN_AMD64)#" plugins/krew/glance.yaml
-	$(SED) "s#PLACEHOLDER_SHA256_DARWIN_ARM64#$(SHA_DARWIN_ARM64)#" plugins/krew/glance.yaml
-	$(SED) "s#PLACEHOLDER_SHA256_LINUX_AMD64#$(SHA_LINUX_AMD64)#" plugins/krew/glance.yaml
-	$(SED) "s#PLACEHOLDER_SHA256_LINUX_ARM64#$(SHA_LINUX_ARM64)#" plugins/krew/glance.yaml
-	$(SED) "s#PLACEHOLDER_SHA256_WINDOWS_AMD64#$(SHA_WINDOWS_AMD64)#" plugins/krew/glance.yaml
+	@# Update version
+	$(SED) 's#version: "v[^"]*"#version: "v$(RELEASE_VERSION)"#' plugins/krew/glance.yaml
+	@# Update release URLs
+	$(SED) 's#/releases/v[^/]*/downloads/#/releases/v$(RELEASE_VERSION)/downloads/#g' plugins/krew/glance.yaml
+	@# Update archive filenames in URLs
+	$(SED) 's#kubectl-glance--#kubectl-glance-$(RELEASE_VERSION)-#g' plugins/krew/glance.yaml
+	$(SED) 's#kubectl-glance-[0-9]*\.[0-9]*\.[0-9]*-#kubectl-glance-$(RELEASE_VERSION)-#g' plugins/krew/glance.yaml
+	@# Update checksums (match sha256 followed by any hex string)
+	$(SED) '/darwin-amd64/,/darwin-arm64/{s#sha256: "[^"]*"#sha256: "$(SHA_DARWIN_AMD64)"#;}' plugins/krew/glance.yaml
+	$(SED) '/darwin-arm64/,/linux-amd64/{s#sha256: "[^"]*"#sha256: "$(SHA_DARWIN_ARM64)"#;}' plugins/krew/glance.yaml
+	$(SED) '/linux-amd64/,/linux-arm64/{s#sha256: "[^"]*"#sha256: "$(SHA_LINUX_AMD64)"#;}' plugins/krew/glance.yaml
+	$(SED) '/linux-arm64/,/windows-amd64/{s#sha256: "[^"]*"#sha256: "$(SHA_LINUX_ARM64)"#;}' plugins/krew/glance.yaml
+	$(SED) '/windows-amd64/,$$/{s#sha256: "[^"]*"#sha256: "$(SHA_WINDOWS_AMD64)"#;}' plugins/krew/glance.yaml
 	@rm -f plugins/krew/glance.yaml.bkp
 	@echo "Krew manifest updated!"
 	@echo ""

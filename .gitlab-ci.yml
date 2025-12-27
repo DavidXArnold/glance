@@ -34,9 +34,14 @@ test:
 build:
   stage: build
   script:
-  - make build-all
-  - make archive-all
-  - make checksums
+  # Use tag version if available (strips 'v' prefix), otherwise use version.go
+  - |
+    if [ -n "$CI_COMMIT_TAG" ]; then
+      export RELEASE_VERSION="${CI_COMMIT_TAG#v}"
+    fi
+    make build-all RELEASE_VERSION="${RELEASE_VERSION:-$(grep 'var Version' version/version.go | cut -d'\"' -f2)}"
+    make archive-all RELEASE_VERSION="${RELEASE_VERSION:-$(grep 'var Version' version/version.go | cut -d'\"' -f2)}"
+    make checksums RELEASE_VERSION="${RELEASE_VERSION:-$(grep 'var Version' version/version.go | cut -d'\"' -f2)}"
   artifacts:
     paths:
     - target/archives/
@@ -143,7 +148,7 @@ update-krew-manifest:
     # Commit and push
     git add plugins/krew/glance.yaml
     git commit -m "chore: update krew manifest for ${CI_COMMIT_TAG}" || echo "No changes to commit"
-    git push -o ci.skip "https://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}
+    git push -o ci.skip "https://oauth2:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}
   artifacts:
     paths:
     - plugins/krew/glance.yaml
@@ -170,4 +175,4 @@ update-formula:
 
     git add Formula/glance.rb
     git commit -m "chore: update homebrew formula for ${CI_COMMIT_TAG}" || echo "No changes to commit"
-    git push -o ci.skip "https://gitlab-ci-token:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}
+    git push -o ci.skip "https://oauth2:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}
