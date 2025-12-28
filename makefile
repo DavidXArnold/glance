@@ -86,7 +86,7 @@ build-all:
 # Create archives for all platforms (Step 1 continued)
 archive-all: build-all
 	@echo "Creating archives..."
-	@mkdir -p target/archives
+	@mkdir -p target/archives target/staging
 	@for platform in $(PLATFORMS); do \
 		BINARY="target/release/kubectl-glance-$(RELEASE_VERSION)-$$platform"; \
 		ARCHIVE="target/archives/kubectl-glance-$(RELEASE_VERSION)-$$platform.tar.gz"; \
@@ -97,10 +97,12 @@ archive-all: build-all
 			RENAMED="kubectl-glance"; \
 		fi; \
 		echo "Archiving $$platform..."; \
-		cp $$BINARY target/release/$$RENAMED; \
-		tar -czvf $$ARCHIVE -C target/release $$RENAMED; \
-		rm target/release/$$RENAMED; \
+		rm -rf target/staging/*; \
+		cp $$BINARY target/staging/$$RENAMED; \
+		cp LICENSE target/staging/LICENSE; \
+		tar -czvf $$ARCHIVE -C target/staging $$RENAMED LICENSE; \
 	done
+	@rm -rf target/staging
 	@echo "Archives created in target/archives/"
 
 # Generate SHA256 checksums (Step 2)
