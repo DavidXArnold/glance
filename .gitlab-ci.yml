@@ -137,8 +137,8 @@ update-krew-manifest:
     echo "  linux-arm64:   ${SHA_LINUX_ARM64}"
     echo "  windows-amd64: ${SHA_WINDOWS_AMD64}"
 
-    # Update version in spec
-    sed -i 's/version: "[^"]*"/version: "'"${VERSION}"'"/' plugins/krew/glance.yaml
+    # Update version in spec (krew requires 'v' prefix)
+    sed -i 's/version: "[^"]*"/version: "v'"${VERSION}"'"/' plugins/krew/glance.yaml
 
     # Update version in all URIs (matches patterns like /0.1.8/ and -0.1.8-)
     sed -i 's|/[0-9]\+\.[0-9]\+\.[0-9]\+/kubectl-glance-[0-9]\+\.[0-9]\+\.[0-9]\+-|/'"${VERSION}"'/kubectl-glance-'"${VERSION}"'-|g' plugins/krew/glance.yaml

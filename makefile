@@ -92,9 +92,14 @@ archive-all: build-all
 		ARCHIVE="target/archives/kubectl-glance-$(RELEASE_VERSION)-$$platform.tar.gz"; \
 		if [ "$$(echo $$platform | cut -d'-' -f1)" = "windows" ]; then \
 			BINARY="$$BINARY.exe"; \
+			RENAMED="kubectl-glance.exe"; \
+		else \
+			RENAMED="kubectl-glance"; \
 		fi; \
 		echo "Archiving $$platform..."; \
-		tar -czvf $$ARCHIVE -C target/release $$(basename $$BINARY); \
+		cp $$BINARY target/release/$$RENAMED; \
+		tar -czvf $$ARCHIVE -C target/release $$RENAMED; \
+		rm target/release/$$RENAMED; \
 	done
 	@echo "Archives created in target/archives/"
 
