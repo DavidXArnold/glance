@@ -114,7 +114,6 @@ update-krew-manifest:
   before_script:
   - git config --global user.email "${GITLAB_USER_EMAIL}"
   - git config --global user.name "${GITLAB_USER_NAME}"
-  - apt-get update && apt-get install -y jq
   # Fetch and checkout the latest main branch before making changes
   - git fetch origin ${CI_DEFAULT_BRANCH}
   - git checkout ${CI_DEFAULT_BRANCH}
@@ -124,7 +123,7 @@ update-krew-manifest:
     VERSION=${CI_COMMIT_TAG#v}
     echo "Updating krew manifest for version ${VERSION}"
 
-    # Get checksums
+    # Get checksums from build artifacts
     SHA_DARWIN_AMD64=$(grep darwin-amd64 target/archives/checksums.txt | cut -d' ' -f1)
     SHA_DARWIN_ARM64=$(grep darwin-arm64 target/archives/checksums.txt | cut -d' ' -f1)
     SHA_LINUX_AMD64=$(grep linux-amd64 target/archives/checksums.txt | cut -d' ' -f1)
@@ -138,19 +137,15 @@ update-krew-manifest:
     echo "  linux-arm64:   ${SHA_LINUX_ARM64}"
     echo "  windows-amd64: ${SHA_WINDOWS_AMD64}"
 
-    # Update manifest
-    sed -i "s#version: \"[^\"]*\"#version: \"${VERSION}\"#" plugins/krew/glance.yaml
-    sed -i "s#v[0-9]*\.[0-9]*\.[0-9]*#v${VERSION}#g" plugins/krew/glance.yaml
-    sed -i "s#PLACEHOLDER_SHA256_DARWIN_AMD64#${SHA_DARWIN_AMD64}#" plugins/krew/glance.yaml
-    sed -i "s#PLACEHOLDER_SHA256_DARWIN_ARM64#${SHA_DARWIN_ARM64}#" plugins/krew/glance.yaml
-    sed -i "s#PLACEHOLDER_SHA256_LINUX_AMD64#${SHA_LINUX_AMD64}#" plugins/krew/glance.yaml
-    sed -i "s#PLACEHOLDER_SHA256_LINUX_ARM64#${SHA_LINUX_ARM64}#" plugins/krew/glance.yaml
-    sed -i "s#PLACEHOLDER_SHA256_WINDOWS_AMD64#${SHA_WINDOWS_AMD64}#" plugins/krew/glance.yaml
+    # Update version and checksums using simple placeholder replacement
+    sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" plugins/krew/glance.yaml
+    sed -i "s/SHA256_DARWIN_AMD64/${SHA_DARWIN_AMD64}/" plugins/krew/glance.yaml
+    sed -i "s/SHA256_DARWIN_ARM64/${SHA_DARWIN_ARM64}/" plugins/krew/glance.yaml
+    sed -i "s/SHA256_LINUX_AMD64/${SHA_LINUX_AMD64}/" plugins/krew/glance.yaml
+    sed -i "s/SHA256_LINUX_ARM64/${SHA_LINUX_ARM64}/" plugins/krew/glance.yaml
+    sed -i "s/SHA256_WINDOWS_AMD64/${SHA_WINDOWS_AMD64}/" plugins/krew/glance.yaml
 
-    # Also update any existing checksums (for re-releases)
-    sed -i "s#sha256: \"[a-f0-9]*\"#sha256: \"PLACEHOLDER\"#g" plugins/krew/glance.yaml
-    sed -i "s#PLACEHOLDER.*darwin-amd64#${SHA_DARWIN_AMD64}#" plugins/krew/glance.yaml || true
-
+    echo "Updated manifest:"
     cat plugins/krew/glance.yaml
 
     # Commit and push

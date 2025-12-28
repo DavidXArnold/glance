@@ -153,3 +153,47 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
 
 **Q: Why both Krew and Homebrew?**
 A: Krew is the standard kubectl plugin manager (cross-platform). Homebrew is convenient for macOS users.
+
+---
+
+## Current Session Status (December 28, 2025)
+
+### Completed
+- **v0.1.6 released** and passing CI
+- Fixed GitLab CI release job to use `release-cli create` (shell variable expansion works)
+- Fixed golangci-lint to run directly with `golangci/golangci-lint:v2.7.2` image (no docker-in-docker)
+- Updated Makefile lint target to run `go mod download` inside container
+- Krew manifest (`plugins/krew/glance.yaml`) updated with v0.1.6 checksums
+
+### Next Steps - Krew PR
+1. **Test locally with krew:**
+   ```bash
+   kubectl krew install --manifest=plugins/krew/glance.yaml
+   kubectl glance --help
+   kubectl glance
+   ```
+
+2. **Fork krew-index and create PR:**
+   ```bash
+   # Fork https://github.com/kubernetes-sigs/krew-index on GitHub
+   git clone https://github.com/YOUR_USERNAME/krew-index.git
+   cd krew-index
+   cp /path/to/glance/plugins/krew/glance.yaml plugins/glance.yaml
+   git checkout -b add-glance-plugin
+   git add plugins/glance.yaml
+   git commit -m "Add glance plugin"
+   git push origin add-glance-plugin
+   # Create PR on GitHub
+   ```
+
+3. **PR requirements for krew-index:**
+   - Plugin name must match filename (`glance.yaml` → `glance`)
+   - All URLs must be publicly accessible
+   - SHA256 checksums must be valid
+   - Must pass `kubectl krew install --manifest=...` test
+
+### Known Issues Fixed This Session
+- GitLab release URLs had empty version strings (fixed with `release-cli create`)
+- golangci-lint v2 failed with GOPATH-style mounts (fixed by using `/app` mount)
+- Docker-in-docker permission issues on some runners (fixed by using lint image directly)
+
