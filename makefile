@@ -56,11 +56,6 @@ download-deps:
 	@echo Download go.mod dependencies
 	@go mod download
 
-formula:
-	${SED} "s#\(sha256 \)\(.*\)#\1\"${ARCHIVE_SHA}\"#" Formula/glance.rb
-	${SED} "s#\(version \)\(.*\)#\1\"${RELEASE_VERSION}\"#" Formula/glance.rb
-	${SED} "s#\(url \)\(.*\)#\1${URL}#" Formula/glance.rb
-
 install-tools: download-deps
 	@echo Installing tools from tools/tools.go
 	@cat ./tools/tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
@@ -189,4 +184,4 @@ tag-release:
 clean:
 	rm -rf target/
 	
-.PHONY: test version build archive formula build-all archive-all checksums krew-plugin release krew-reset krew-validate clean
+.PHONY: test version build archive build-all archive-all checksums krew-plugin release krew-reset krew-validate clean

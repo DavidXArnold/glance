@@ -162,33 +162,6 @@ update-krew-manifest:
     - plugins/krew/glance.yaml
     expire_in: 1 week
 
-# Optional: Update Homebrew formula (only on tags)
-update-formula:
-  stage: release
-  needs:
-  - job: build
-    artifacts: true
-  rules:
-  - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-  before_script:
-  - git config --global user.email "${GITLAB_USER_EMAIL}"
-  - git config --global user.name "${GITLAB_USER_NAME}"
-  # Fetch and checkout the latest main branch before making changes
-  - git fetch origin ${CI_DEFAULT_BRANCH}
-  - git checkout ${CI_DEFAULT_BRANCH}
-  - git reset --hard origin/${CI_DEFAULT_BRANCH}
-  script:
-  - |
-    VERSION=${CI_COMMIT_TAG#v}
-    SHA_DARWIN_AMD64=$(grep darwin-amd64 target/archives/checksums.txt | cut -d' ' -f1)
-
-    sed -i "s#sha256 \"[^\"]*\"#sha256 \"${SHA_DARWIN_AMD64}\"#" Formula/glance.rb
-    sed -i "s#version \"[^\"]*\"#version \"${VERSION}\"#" Formula/glance.rb
-
-    git add Formula/glance.rb
-    git commit -m "chore: update homebrew formula for ${CI_COMMIT_TAG}" || echo "No changes to commit"
-    git push -o ci.skip "https://oauth2:${GL_CI_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git" HEAD:${CI_DEFAULT_BRANCH}
-
 # Sync release to GitHub mirror
 release-github:
   stage: release
@@ -221,11 +194,6 @@ release-github:
 **Krew (recommended):**
 \`\`\`shell
 kubectl krew install glance
-\`\`\`
-
-**Homebrew (macOS):**
-\`\`\`shell
-brew install davidxarnold/tap/glance
 \`\`\`
 
 ### Manual Download

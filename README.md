@@ -21,7 +21,6 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 
 - [Installation](#installation)
   - [Krew (Recommended)](#krew-kubectl-plugin-manager)
-  - [Homebrew (macOS)](#macos)
   - [From Source](#from-source)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
@@ -45,14 +44,6 @@ The easiest way to install glance is through [krew](https://krew.sigs.k8s.io/):
 ```shell
 kubectl krew update
 kubectl krew install glance
-```
-
-### macOS
-
-On macOS, install via [Homebrew](https://brew.sh):
-
-```shell
-brew install davidxarnold/glance/glance
 ```
 
 ### From Source
@@ -708,7 +699,6 @@ The CI pipeline will automatically:
 4. Generate SHA256 checksums
 5. Create a GitLab Release with downloadable artifacts
 6. Update the krew manifest with new version and checksums
-7. Update the Homebrew formula
 
 #### Release Artifacts
 

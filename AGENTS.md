@@ -29,10 +29,8 @@ glance/
 │       └── util.go        # Shared utilities
 ├── version/
 │   └── version.go         # Version constant (MUST be updated with releases)
-├── plugins/krew/
-│   └── glance.yaml        # Krew plugin manifest (auto-updated by CI)
-└── Formula/
-    └── glance.rb          # Homebrew formula (auto-updated by CI)
+└── plugins/krew/
+    └── glance.yaml        # Krew plugin manifest (auto-updated by CI)
 ```
 
 ## Key Dependencies
@@ -99,7 +97,6 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 - Uploads to GitLab Package Registry
 - Creates GitLab Release
 - Updates `plugins/krew/glance.yaml` with new checksums
-- Updates `Formula/glance.rb` with new checksums
 
 ## CI/CD Notes
 
@@ -113,7 +110,6 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 When releasing:
 - `version/version.go` - **Manual**: Update before tagging
 - `plugins/krew/glance.yaml` - **Auto**: Updated by CI
-- `Formula/glance.rb` - **Auto**: Updated by CI
 
 ## Common Tasks
 
@@ -150,9 +146,6 @@ A: The release jobs run on tag commits which may be behind `main`. The CI now fe
 
 **Q: How do I test locally without a cluster?**
 A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real cluster.
-
-**Q: Why both Krew and Homebrew?**
-A: Krew is the standard kubectl plugin manager (cross-platform). Homebrew is convenient for macOS users.
 
 ---
 
