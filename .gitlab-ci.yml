@@ -137,13 +137,18 @@ update-krew-manifest:
     echo "  linux-arm64:   ${SHA_LINUX_ARM64}"
     echo "  windows-amd64: ${SHA_WINDOWS_AMD64}"
 
-    # Update version and checksums using simple placeholder replacement
-    sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" plugins/krew/glance.yaml
-    sed -i "s/SHA256_DARWIN_AMD64/${SHA_DARWIN_AMD64}/" plugins/krew/glance.yaml
-    sed -i "s/SHA256_DARWIN_ARM64/${SHA_DARWIN_ARM64}/" plugins/krew/glance.yaml
-    sed -i "s/SHA256_LINUX_AMD64/${SHA_LINUX_AMD64}/" plugins/krew/glance.yaml
-    sed -i "s/SHA256_LINUX_ARM64/${SHA_LINUX_ARM64}/" plugins/krew/glance.yaml
-    sed -i "s/SHA256_WINDOWS_AMD64/${SHA_WINDOWS_AMD64}/" plugins/krew/glance.yaml
+    # Update version in spec
+    sed -i 's/version: "[^"]*"/version: "'"${VERSION}"'"/' plugins/krew/glance.yaml
+
+    # Update version in all URIs (matches patterns like /0.1.8/ and -0.1.8-)
+    sed -i 's|/[0-9]\+\.[0-9]\+\.[0-9]\+/kubectl-glance-[0-9]\+\.[0-9]\+\.[0-9]\+-|/'"${VERSION}"'/kubectl-glance-'"${VERSION}"'-|g' plugins/krew/glance.yaml
+
+    # Update checksums for each platform (matches 64-char hex strings after sha256:)
+    sed -i '/darwin-amd64\.tar\.gz/{n;s/sha256: [a-f0-9]\{64\}/sha256: '"${SHA_DARWIN_AMD64}"'/}' plugins/krew/glance.yaml
+    sed -i '/darwin-arm64\.tar\.gz/{n;s/sha256: [a-f0-9]\{64\}/sha256: '"${SHA_DARWIN_ARM64}"'/}' plugins/krew/glance.yaml
+    sed -i '/linux-amd64\.tar\.gz/{n;s/sha256: [a-f0-9]\{64\}/sha256: '"${SHA_LINUX_AMD64}"'/}' plugins/krew/glance.yaml
+    sed -i '/linux-arm64\.tar\.gz/{n;s/sha256: [a-f0-9]\{64\}/sha256: '"${SHA_LINUX_ARM64}"'/}' plugins/krew/glance.yaml
+    sed -i '/windows-amd64\.tar\.gz/{n;s/sha256: [a-f0-9]\{64\}/sha256: '"${SHA_WINDOWS_AMD64}"'/}' plugins/krew/glance.yaml
 
     echo "Updated manifest:"
     cat plugins/krew/glance.yaml
