@@ -186,33 +186,40 @@ release-github:
     
     echo "Creating GitHub release for ${CI_COMMIT_TAG}..."
     
-    # Build release body with download links
-    BODY="## Glance ${CI_COMMIT_TAG}
+    # Build release body with download links (using heredoc to avoid YAML parsing issues)
+    BODY=$(cat <<'RELEASE_BODY'
+## Glance COMMIT_TAG_PLACEHOLDER
 
 ### Installation
 
 **Krew (recommended):**
-\`\`\`shell
+```shell
 kubectl krew install glance
-\`\`\`
+```
 
 ### Manual Download
 
 | Platform | Architecture | Download |
 |----------|--------------|----------|
-| macOS | Intel (amd64) | [kubectl-glance-${VERSION}-darwin-amd64.tar.gz](${PKG_BASE}/kubectl-glance-${VERSION}-darwin-amd64.tar.gz) |
-| macOS | Apple Silicon (arm64) | [kubectl-glance-${VERSION}-darwin-arm64.tar.gz](${PKG_BASE}/kubectl-glance-${VERSION}-darwin-arm64.tar.gz) |
-| Linux | amd64 | [kubectl-glance-${VERSION}-linux-amd64.tar.gz](${PKG_BASE}/kubectl-glance-${VERSION}-linux-amd64.tar.gz) |
-| Linux | arm64 | [kubectl-glance-${VERSION}-linux-arm64.tar.gz](${PKG_BASE}/kubectl-glance-${VERSION}-linux-arm64.tar.gz) |
-| Windows | amd64 | [kubectl-glance-${VERSION}-windows-amd64.tar.gz](${PKG_BASE}/kubectl-glance-${VERSION}-windows-amd64.tar.gz) |
+| macOS | Intel (amd64) | [kubectl-glance-VERSION_PLACEHOLDER-darwin-amd64.tar.gz](PKG_BASE_PLACEHOLDER/kubectl-glance-VERSION_PLACEHOLDER-darwin-amd64.tar.gz) |
+| macOS | Apple Silicon (arm64) | [kubectl-glance-VERSION_PLACEHOLDER-darwin-arm64.tar.gz](PKG_BASE_PLACEHOLDER/kubectl-glance-VERSION_PLACEHOLDER-darwin-arm64.tar.gz) |
+| Linux | amd64 | [kubectl-glance-VERSION_PLACEHOLDER-linux-amd64.tar.gz](PKG_BASE_PLACEHOLDER/kubectl-glance-VERSION_PLACEHOLDER-linux-amd64.tar.gz) |
+| Linux | arm64 | [kubectl-glance-VERSION_PLACEHOLDER-linux-arm64.tar.gz](PKG_BASE_PLACEHOLDER/kubectl-glance-VERSION_PLACEHOLDER-linux-arm64.tar.gz) |
+| Windows | amd64 | [kubectl-glance-VERSION_PLACEHOLDER-windows-amd64.tar.gz](PKG_BASE_PLACEHOLDER/kubectl-glance-VERSION_PLACEHOLDER-windows-amd64.tar.gz) |
 
 ### Checksums
 
-[checksums.txt](${PKG_BASE}/checksums.txt)
+[checksums.txt](PKG_BASE_PLACEHOLDER/checksums.txt)
 
 ### Full Release Notes
 
-See [GitLab Release](https://gitlab.com/davidxarnold/glance/-/releases/${CI_COMMIT_TAG}) for additional details."
+See [GitLab Release](https://gitlab.com/davidxarnold/glance/-/releases/COMMIT_TAG_PLACEHOLDER) for additional details.
+RELEASE_BODY
+)
+    # Replace placeholders with actual values
+    BODY="${BODY//COMMIT_TAG_PLACEHOLDER/${CI_COMMIT_TAG}}"
+    BODY="${BODY//VERSION_PLACEHOLDER/${VERSION}}"
+    BODY="${BODY//PKG_BASE_PLACEHOLDER/${PKG_BASE}}"
 
     # Escape for JSON
     BODY_JSON=$(printf '%s' "$BODY" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
