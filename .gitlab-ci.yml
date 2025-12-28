@@ -15,15 +15,10 @@ stages:
 # Run on all branches
 lint:
   stage: lint
-  image: docker:29
-  services:
-  - docker:29-dind
-  variables:
-    DOCKER_DRIVER: overlay2
-    DOCKER_TLS_CERTDIR: "/certs"
+  image: golangci/golangci-lint:v2.7.2
   script:
-  - apk add make
-  - make lint
+  - go mod download
+  - golangci-lint run -v --timeout=5m
 
 test:
   stage: test
