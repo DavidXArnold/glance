@@ -117,8 +117,9 @@ func configureLogging() {
 
 		// Create log file: <log-level>-glance.log
 		logFileName := fmt.Sprintf("%s-glance.log", logLevel)
-		logFilePath := filepath.Join(logDir, logFileName)
+		logFilePath := filepath.Clean(filepath.Join(logDir, logFileName))
 
+		// #nosec G304 -- path is constructed from controlled inputs (home dir + fixed filename)
 		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err == nil {
 			log.SetOutput(logFile)
