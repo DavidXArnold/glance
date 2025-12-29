@@ -17,12 +17,14 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/widgets"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,14 +59,33 @@ const (
 	nodeStatusReady    = "Ready"
 	nodeStatusNotReady = "NotReady"
 
+	// Sort mode string constant
+	sortByStatus = "status"
+
 	// Progress bar thresholds
 	thresholdLow      = 50.0
 	thresholdMedium   = 75.0
 	thresholdHigh     = 90.0
 	thresholdCritical = 100.0
+
+	// Default limits for large cluster support
+	defaultNodeLimit      = 20
+	defaultPodLimit       = 100
+	defaultMaxConcurrent  = 50
+	largeClusterThreshold = 100
 )
 
-// ResourceMetrics holds the resource values and capacity for progress bars
+// SortMode represents the current sort mode
+type SortMode int
+
+const (
+	SortByName SortMode = iota
+	SortByStatus
+	SortByCPU
+	SortByMemory
+)
+
+// ResourceMetrics holds the resource values and capacity for progress bars.
 type ResourceMetrics struct {
 	CPURequest  float64
 	CPULimit    float64
@@ -89,11 +110,22 @@ type LiveState struct {
 	showBars          bool
 	showPercentages   bool
 	compactMode       bool
+	// Scaling options
+	nodeLimit     int
+	podLimit      int
+	maxConcurrent int
+	sortMode      SortMode
+	totalNodes    int // Track total for "showing X of Y" display
+	totalPods     int
 }
 
 // NewLiveCmd creates the live subcommand
 func NewLiveCmd(gc *GlanceConfig) *cobra.Command {
 	var refreshInterval int
+	var nodeLimit int
+	var podLimit int
+	var maxConcurrent int
+	var sortBy string
 
 	cmd := &cobra.Command{
 		Use:   "live",
@@ -106,6 +138,11 @@ View modes:
   - Nodes: Shows node capacity, allocation, and usage
   - Deployments: Shows deployment resource requests and replica status
 
+Scaling options:
+  - Use --node-limit to limit displayed nodes (default: 20)
+  - Use --pod-limit to limit displayed pods (default: 100)
+  - Use --sort-by to sort by status, cpu, memory, or name (default: status)
+
 Controls will be displayed at the bottom of the screen.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -115,16 +152,44 @@ Controls will be displayed at the bottom of the screen.`,
 				return fmt.Errorf("failed to create kubernetes client: %w", err)
 			}
 
-			return runLive(k8sClient, gc, time.Duration(refreshInterval)*time.Second)
+			// Parse sort mode
+			sortMode := SortByStatus
+			switch sortBy {
+			case "name":
+				sortMode = SortByName
+			case "cpu":
+				sortMode = SortByCPU
+			case "memory", "mem":
+				sortMode = SortByMemory
+			case sortByStatus:
+				sortMode = SortByStatus
+			}
+
+			return runLive(k8sClient, gc, time.Duration(refreshInterval)*time.Second,
+				nodeLimit, podLimit, maxConcurrent, sortMode)
 		},
 	}
 
 	cmd.Flags().IntVarP(&refreshInterval, "refresh", "r", 2, "Refresh interval in seconds")
+	cmd.Flags().IntVarP(&nodeLimit, "node-limit", "n", defaultNodeLimit,
+		"Maximum nodes to display (0 for unlimited)")
+	cmd.Flags().IntVar(&podLimit, "pod-limit", defaultPodLimit,
+		"Maximum pods to display per view (0 for unlimited)")
+	cmd.Flags().IntVar(&maxConcurrent, "max-concurrent", defaultMaxConcurrent,
+		"Maximum concurrent API requests")
+	cmd.Flags().StringVar(&sortBy, "sort-by", sortByStatus,
+		"Sort by: status, name, cpu, memory")
 
 	return cmd
 }
 
-func runLive(k8sClient *kubernetes.Clientset, gc *GlanceConfig, refreshInterval time.Duration) error {
+func runLive(
+	k8sClient *kubernetes.Clientset,
+	gc *GlanceConfig,
+	refreshInterval time.Duration,
+	nodeLimit, podLimit, maxConcurrent int,
+	sortMode SortMode,
+) error {
 	if err := ui.Init(); err != nil {
 		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
@@ -138,6 +203,24 @@ func runLive(k8sClient *kubernetes.Clientset, gc *GlanceConfig, refreshInterval 
 		showBars:          true,
 		showPercentages:   true,
 		compactMode:       false,
+		nodeLimit:         nodeLimit,
+		podLimit:          podLimit,
+		maxConcurrent:     maxConcurrent,
+		sortMode:          sortMode,
+	}
+
+	// Check cluster size and warn for large clusters
+	ctx := context.Background()
+	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		ResourceVersion: "0", // Use watch cache for faster response
+	})
+	if err == nil {
+		state.totalNodes = len(nodes.Items)
+		if state.totalNodes > largeClusterThreshold {
+			log.Warnf("Large cluster detected (%d nodes). Using --node-limit=%d for performance. "+
+				"Consider using --watch mode for real-time updates with lower API load.",
+				state.totalNodes, nodeLimit)
+		}
 	}
 
 	// Initialize UI components
@@ -199,6 +282,9 @@ func runLive(k8sClient *kubernetes.Clientset, gc *GlanceConfig, refreshInterval 
 				state.showPercentages = !state.showPercentages
 			case "c":
 				state.compactMode = !state.compactMode
+			case "s":
+				// Cycle through sort modes
+				state.sortMode = (state.sortMode + 1) % 4
 			case "<Resize>":
 				// Handle terminal resize
 			}
@@ -228,11 +314,11 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 
 	switch state.mode {
 	case ViewNamespaces:
-		header, data, metrics, err = fetchNamespaceData(ctx, k8sClient, gc)
+		header, data, metrics, err = fetchNamespaceData(ctx, k8sClient, gc, state)
 	case ViewPods:
-		header, data, metrics, err = fetchPodData(ctx, k8sClient, gc, state.selectedNamespace)
+		header, data, metrics, err = fetchPodData(ctx, k8sClient, gc, state.selectedNamespace, state)
 	case ViewNodes:
-		header, data, metrics, err = fetchNodeData(ctx, k8sClient, gc)
+		header, data, metrics, err = fetchNodeData(ctx, k8sClient, gc, state)
 	case ViewDeployments:
 		header, data, metrics, err = fetchDeploymentData(ctx, k8sClient, state.selectedNamespace)
 	}
@@ -303,7 +389,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	return nil
 }
 
-// SummaryStats holds aggregate statistics for the summary bar
+// SummaryStats holds aggregate statistics for the summary bar.
 type SummaryStats struct {
 	TotalItems    int
 	AvgCPUUsage   float64
@@ -465,111 +551,27 @@ func safePercentage(value, capacity float64) float64 {
 	return (value / capacity) * 100
 }
 
+// nsRowData holds data for a single namespace row for parallel processing.
+type nsRowData struct {
+	row      []string
+	metrics  ResourceMetrics
+	cpuUsage float64
+}
+
 func fetchNamespaceData(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
 	gc *GlanceConfig,
+	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{"NAMESPACE", "CPU REQ", "CPU LIMIT", "CPU USAGE", "MEM REQ", "MEM LIMIT", "MEM USAGE", "PODS"}
 
-	namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	// Use watch cache for faster response
+	namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		ResourceVersion: "0",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list namespaces: %w", err)
-	}
-
-	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
-	if err != nil {
-		return header, [][]string{}, []ResourceMetrics{}, nil // Continue without metrics
-	}
-
-	var rows [][]string
-	var metrics []ResourceMetrics
-	for _, ns := range namespaces.Items {
-		cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
-		cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memReq := resource.NewQuantity(0, resource.BinarySI)
-		memLimit := resource.NewQuantity(0, resource.BinarySI)
-		cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memUsage := resource.NewQuantity(0, resource.BinarySI)
-
-		pods, err := k8sClient.CoreV1().Pods(ns.Name).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			continue
-		}
-
-		podCount := len(pods.Items)
-
-		for _, pod := range pods.Items {
-			for _, container := range pod.Spec.Containers {
-				if req := container.Resources.Requests.Cpu(); req != nil {
-					cpuReq.Add(*req)
-				}
-				if lim := container.Resources.Limits.Cpu(); lim != nil {
-					cpuLimit.Add(*lim)
-				}
-				if req := container.Resources.Requests.Memory(); req != nil {
-					memReq.Add(*req)
-				}
-				if lim := container.Resources.Limits.Memory(); lim != nil {
-					memLimit.Add(*lim)
-				}
-			}
-		}
-
-		// Get metrics for pods in namespace
-		podMetrics, err := metricsClient.MetricsV1beta1().PodMetricses(ns.Name).List(ctx, metav1.ListOptions{})
-		if err == nil {
-			for _, pm := range podMetrics.Items {
-				for _, container := range pm.Containers {
-					cpuUsage.Add(container.Usage[v1.ResourceCPU])
-					memUsage.Add(container.Usage[v1.ResourceMemory])
-				}
-			}
-		}
-
-		rows = append(rows, []string{
-			ns.Name,
-			formatMilliCPU(cpuReq),
-			formatMilliCPU(cpuLimit),
-			formatMilliCPU(cpuUsage),
-			formatBytes(memReq),
-			formatBytes(memLimit),
-			formatBytes(memUsage),
-			fmt.Sprintf("%d", podCount),
-		})
-
-		// Store metrics for progress bars
-		metrics = append(metrics, ResourceMetrics{
-			CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
-			CPULimit:    float64(cpuLimit.MilliValue()) / 1000.0,
-			CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
-			CPUCapacity: float64(cpuLimit.MilliValue()) / 1000.0,
-			MemRequest:  float64(memReq.Value()),
-			MemLimit:    float64(memLimit.Value()),
-			MemUsage:    float64(memUsage.Value()),
-			MemCapacity: float64(memLimit.Value()),
-		})
-	}
-
-	// Sort by namespace name
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i][0] < rows[j][0]
-	})
-
-	return header, rows, metrics, nil
-}
-
-func fetchPodData(
-	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	gc *GlanceConfig,
-	namespace string,
-) ([]string, [][]string, []ResourceMetrics, error) {
-	header := []string{"POD", "CPU REQ", "CPU LIMIT", "CPU USAGE", "MEM REQ", "MEM LIMIT", "MEM USAGE", "STATUS"}
-
-	pods, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to list pods: %w", err)
 	}
 
 	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
@@ -577,16 +579,225 @@ func fetchPodData(
 		return header, [][]string{}, []ResourceMetrics{}, nil
 	}
 
-	podMetrics, err := metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
-	metricsMap := make(map[string]*metricsV1beta1api.PodMetrics)
-	if err == nil {
-		for i := range podMetrics.Items {
-			metricsMap[podMetrics.Items[i].Name] = &podMetrics.Items[i]
+	// Fetch ALL pods and metrics in parallel (instead of per-namespace queries)
+	g, gCtx := errgroup.WithContext(ctx)
+
+	var allPods *v1.PodList
+	var allPodMetrics *metricsV1beta1api.PodMetricsList
+
+	g.Go(func() error {
+		var err error
+		allPods, err = k8sClient.CoreV1().Pods("").List(gCtx, metav1.ListOptions{
+			ResourceVersion: "0",
+		})
+		return err
+	})
+
+	g.Go(func() error {
+		var err error
+		allPodMetrics, err = metricsClient.MetricsV1beta1().PodMetricses("").List(gCtx, metav1.ListOptions{
+			ResourceVersion: "0",
+		})
+		if err != nil {
+			log.Debugf("Failed to fetch pod metrics: %v", err)
+		}
+		return nil // Don't fail on metrics error
+	})
+
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to fetch pods: %w", err)
+	}
+
+	// Group pods by namespace
+	podsByNS := make(map[string][]v1.Pod)
+	if allPods != nil {
+		for _, pod := range allPods.Items {
+			podsByNS[pod.Namespace] = append(podsByNS[pod.Namespace], pod)
 		}
 	}
 
-	var rows [][]string
-	var metrics []ResourceMetrics
+	// Group metrics by namespace+pod
+	metricsByPod := make(map[string]*metricsV1beta1api.PodMetrics)
+	if allPodMetrics != nil {
+		for i := range allPodMetrics.Items {
+			pm := &allPodMetrics.Items[i]
+			key := pm.Namespace + "/" + pm.Name
+			metricsByPod[key] = pm
+		}
+	}
+
+	// Process namespaces in parallel
+	nsData := make([]nsRowData, len(namespaces.Items))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, state.maxConcurrent)
+
+	for i, ns := range namespaces.Items {
+		wg.Add(1)
+		go func(idx int, ns v1.Namespace) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
+			cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
+			memReq := resource.NewQuantity(0, resource.BinarySI)
+			memLimit := resource.NewQuantity(0, resource.BinarySI)
+			cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
+			memUsage := resource.NewQuantity(0, resource.BinarySI)
+
+			pods := podsByNS[ns.Name]
+			podCount := len(pods)
+
+			for _, pod := range pods {
+				for _, container := range pod.Spec.Containers {
+					if req := container.Resources.Requests.Cpu(); req != nil {
+						cpuReq.Add(*req)
+					}
+					if lim := container.Resources.Limits.Cpu(); lim != nil {
+						cpuLimit.Add(*lim)
+					}
+					if req := container.Resources.Requests.Memory(); req != nil {
+						memReq.Add(*req)
+					}
+					if lim := container.Resources.Limits.Memory(); lim != nil {
+						memLimit.Add(*lim)
+					}
+				}
+
+				// Get metrics for this pod
+				key := pod.Namespace + "/" + pod.Name
+				if pm, ok := metricsByPod[key]; ok {
+					for _, container := range pm.Containers {
+						cpuUsage.Add(container.Usage[v1.ResourceCPU])
+						memUsage.Add(container.Usage[v1.ResourceMemory])
+					}
+				}
+			}
+
+			cpuUsagePct := float64(0)
+			if cpuLimit.MilliValue() > 0 {
+				cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuLimit.MilliValue()) * 100
+			}
+
+			row := []string{
+				ns.Name,
+				formatMilliCPU(cpuReq),
+				formatMilliCPU(cpuLimit),
+				formatMilliCPU(cpuUsage),
+				formatBytes(memReq),
+				formatBytes(memLimit),
+				formatBytes(memUsage),
+				fmt.Sprintf("%d", podCount),
+			}
+
+			metrics := ResourceMetrics{
+				CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
+				CPULimit:    float64(cpuLimit.MilliValue()) / 1000.0,
+				CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
+				CPUCapacity: float64(cpuLimit.MilliValue()) / 1000.0,
+				MemRequest:  float64(memReq.Value()),
+				MemLimit:    float64(memLimit.Value()),
+				MemUsage:    float64(memUsage.Value()),
+				MemCapacity: float64(memLimit.Value()),
+			}
+
+			nsData[idx] = nsRowData{
+				row:      row,
+				metrics:  metrics,
+				cpuUsage: cpuUsagePct,
+			}
+		}(i, ns)
+	}
+	wg.Wait()
+
+	// Sort based on sort mode
+	switch state.sortMode {
+	case SortByName:
+		sort.Slice(nsData, func(i, j int) bool {
+			return nsData[i].row[0] < nsData[j].row[0]
+		})
+	case SortByCPU:
+		sort.Slice(nsData, func(i, j int) bool {
+			return nsData[i].cpuUsage > nsData[j].cpuUsage
+		})
+	default:
+		// Default: sort by name
+		sort.Slice(nsData, func(i, j int) bool {
+			return nsData[i].row[0] < nsData[j].row[0]
+		})
+	}
+
+	// Build final rows and metrics
+	rows := make([][]string, 0, len(nsData))
+	metrics := make([]ResourceMetrics, 0, len(nsData))
+	for _, nd := range nsData {
+		rows = append(rows, nd.row)
+		metrics = append(metrics, nd.metrics)
+	}
+
+	return header, rows, metrics, nil
+}
+
+// podRowData holds data for a single pod row for sorting and limiting.
+type podRowData struct {
+	row       []string
+	metrics   ResourceMetrics
+	isRunning bool
+	cpuUsage  float64
+	memUsage  float64
+}
+
+func fetchPodData(
+	ctx context.Context,
+	k8sClient *kubernetes.Clientset,
+	gc *GlanceConfig,
+	namespace string,
+	state *LiveState,
+) ([]string, [][]string, []ResourceMetrics, error) {
+	header := []string{"POD", "CPU REQ", "CPU LIMIT", "CPU USAGE", "MEM REQ", "MEM LIMIT", "MEM USAGE", "STATUS"}
+
+	// Fetch pods and metrics in parallel using watch cache
+	g, gCtx := errgroup.WithContext(ctx)
+
+	var pods *v1.PodList
+	var podMetricsList *metricsV1beta1api.PodMetricsList
+
+	g.Go(func() error {
+		var err error
+		pods, err = k8sClient.CoreV1().Pods(namespace).List(gCtx, metav1.ListOptions{
+			ResourceVersion: "0",
+		})
+		return err
+	})
+
+	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
+	if err == nil {
+		g.Go(func() error {
+			var err error
+			podMetricsList, err = metricsClient.MetricsV1beta1().PodMetricses(namespace).List(gCtx, metav1.ListOptions{
+				ResourceVersion: "0",
+			})
+			if err != nil {
+				log.Debugf("Failed to fetch pod metrics: %v", err)
+			}
+			return nil // Don't fail on metrics error
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	state.totalPods = len(pods.Items)
+
+	metricsMap := make(map[string]*metricsV1beta1api.PodMetrics)
+	if podMetricsList != nil {
+		for i := range podMetricsList.Items {
+			metricsMap[podMetricsList.Items[i].Name] = &podMetricsList.Items[i]
+		}
+	}
+
+	podData := make([]podRowData, 0, len(pods.Items))
 	for _, pod := range pods.Items {
 		cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
 		cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
@@ -620,8 +831,18 @@ func fetchPodData(
 		// Format status with icon
 		podStatus := string(pod.Status.Phase)
 		statusIcon := getStatusIcon(podStatus)
+		isRunning := pod.Status.Phase == v1.PodRunning
 
-		rows = append(rows, []string{
+		cpuUsagePct := float64(0)
+		if cpuLimit.MilliValue() > 0 {
+			cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuLimit.MilliValue()) * 100
+		}
+		memUsagePct := float64(0)
+		if memLimit.Value() > 0 {
+			memUsagePct = float64(memUsage.Value()) / float64(memLimit.Value()) * 100
+		}
+
+		row := []string{
 			pod.Name,
 			formatMilliCPU(cpuReq),
 			formatMilliCPU(cpuLimit),
@@ -630,9 +851,9 @@ func fetchPodData(
 			formatBytes(memLimit),
 			formatBytes(memUsage),
 			statusIcon + podStatus,
-		})
+		}
 
-		metrics = append(metrics, ResourceMetrics{
+		metrics := ResourceMetrics{
 			CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
 			CPULimit:    float64(cpuLimit.MilliValue()) / 1000.0,
 			CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
@@ -641,68 +862,178 @@ func fetchPodData(
 			MemLimit:    float64(memLimit.Value()),
 			MemUsage:    float64(memUsage.Value()),
 			MemCapacity: float64(memLimit.Value()),
+		}
+
+		podData = append(podData, podRowData{
+			row:       row,
+			metrics:   metrics,
+			isRunning: isRunning,
+			cpuUsage:  cpuUsagePct,
+			memUsage:  memUsagePct,
 		})
 	}
 
+	// Sort based on sort mode
+	switch state.sortMode {
+	case SortByStatus:
+		// Non-running pods first (Pending, Failed, etc.)
+		sort.Slice(podData, func(i, j int) bool {
+			if podData[i].isRunning != podData[j].isRunning {
+				return !podData[i].isRunning
+			}
+			return podData[i].cpuUsage > podData[j].cpuUsage
+		})
+	case SortByName:
+		sort.Slice(podData, func(i, j int) bool {
+			return podData[i].row[0] < podData[j].row[0]
+		})
+	case SortByCPU:
+		sort.Slice(podData, func(i, j int) bool {
+			return podData[i].cpuUsage > podData[j].cpuUsage
+		})
+	case SortByMemory:
+		sort.Slice(podData, func(i, j int) bool {
+			return podData[i].memUsage > podData[j].memUsage
+		})
+	}
+
+	// Apply pod limit
+	limit := len(podData)
+	if state.podLimit > 0 && state.podLimit < limit {
+		limit = state.podLimit
+	}
+
+	// Build final rows and metrics
+	rows := make([][]string, 0, limit)
+	metrics := make([]ResourceMetrics, 0, limit)
+	for i := 0; i < limit; i++ {
+		rows = append(rows, podData[i].row)
+		metrics = append(metrics, podData[i].metrics)
+	}
+
 	return header, rows, metrics, nil
+}
+
+// nodeRowData holds data for a single node row for parallel processing.
+type nodeRowData struct {
+	row      []string
+	metrics  ResourceMetrics
+	isReady  bool
+	cpuUsage float64
+	memUsage float64
 }
 
 func fetchNodeData(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
 	gc *GlanceConfig,
+	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{"NODE", "STATUS", "CPU CAP", "CPU ALLOC", "CPU USAGE", "MEM CAP", "MEM ALLOC", "MEM USAGE", "PODS"}
 
-	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	// Use watch cache for faster response (resourceVersion="0")
+	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		ResourceVersion: "0",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
+
+	state.totalNodes = len(nodes.Items)
 
 	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
 	if err != nil {
 		return header, [][]string{}, []ResourceMetrics{}, nil
 	}
 
-	nodeMetrics, err := metricsClient.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+	// Fetch all data in parallel using errgroup
+	g, gCtx := errgroup.WithContext(ctx)
+
+	var nodeMetrics *metricsV1beta1api.NodeMetricsList
+	var allPods *v1.PodList
+
+	// Fetch node metrics in parallel
+	g.Go(func() error {
+		var err error
+		nodeMetrics, err = metricsClient.MetricsV1beta1().NodeMetricses().List(gCtx, metav1.ListOptions{
+			ResourceVersion: "0",
+		})
+		return err
+	})
+
+	// Fetch ALL pods once (instead of per-node queries) using watch cache
+	g.Go(func() error {
+		var err error
+		allPods, err = k8sClient.CoreV1().Pods("").List(gCtx, metav1.ListOptions{
+			ResourceVersion: "0",
+			FieldSelector:   "status.phase!=Succeeded,status.phase!=Failed",
+		})
+		return err
+	})
+
+	// Wait for parallel fetches to complete
+	if err := g.Wait(); err != nil {
+		log.Debugf("Error fetching metrics or pods: %v", err)
+	}
+
+	// Build metrics map
 	metricsMap := make(map[string]*metricsV1beta1api.NodeMetrics)
-	if err == nil {
+	if nodeMetrics != nil {
 		for i := range nodeMetrics.Items {
 			metricsMap[nodeMetrics.Items[i].Name] = &nodeMetrics.Items[i]
 		}
 	}
 
-	var rows [][]string
-	var metrics []ResourceMetrics
-	for _, node := range nodes.Items {
-		// Get node status
-		nodeStatus := "Unknown"
-		for _, condition := range node.Status.Conditions {
-			if condition.Type == v1.NodeReady {
-				if condition.Status == v1.ConditionTrue {
-					nodeStatus = statusReady + " " + nodeStatusReady
-				} else {
-					nodeStatus = statusNotReady + " " + nodeStatusNotReady
-				}
-				break
+	// Group pods by node name (O(n) instead of O(n*m) API calls)
+	podsByNode := make(map[string][]v1.Pod)
+	if allPods != nil {
+		for _, pod := range allPods.Items {
+			nodeName := pod.Spec.NodeName
+			if nodeName != "" {
+				podsByNode[nodeName] = append(podsByNode[nodeName], pod)
 			}
 		}
+	}
 
-		cpuCap := node.Status.Capacity.Cpu()
-		memCap := node.Status.Capacity.Memory()
-		cpuAlloc := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memAlloc := resource.NewQuantity(0, resource.BinarySI)
-		cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memUsage := resource.NewQuantity(0, resource.BinarySI)
+	// Process nodes in parallel with semaphore for concurrency limit
+	nodeData := make([]nodeRowData, len(nodes.Items))
+	var mu sync.Mutex
+	sem := make(chan struct{}, state.maxConcurrent)
 
-		pods, err := k8sClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("spec.nodeName=%s", node.Name),
-		})
+	var wg sync.WaitGroup
+	for i, node := range nodes.Items {
+		wg.Add(1)
+		go func(idx int, node v1.Node) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
 
-		podCount := 0
-		if err == nil {
-			podCount = len(pods.Items)
-			for _, pod := range pods.Items {
+			// Get node status
+			isReady := false
+			nodeStatus := "Unknown"
+			for _, condition := range node.Status.Conditions {
+				if condition.Type == v1.NodeReady {
+					if condition.Status == v1.ConditionTrue {
+						nodeStatus = statusReady + " " + nodeStatusReady
+						isReady = true
+					} else {
+						nodeStatus = statusNotReady + " " + nodeStatusNotReady
+					}
+					break
+				}
+			}
+
+			cpuCap := node.Status.Capacity.Cpu()
+			memCap := node.Status.Capacity.Memory()
+			cpuAlloc := resource.NewMilliQuantity(0, resource.DecimalSI)
+			memAlloc := resource.NewQuantity(0, resource.BinarySI)
+			cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
+			memUsage := resource.NewQuantity(0, resource.BinarySI)
+
+			// Use pre-fetched pods grouped by node
+			pods := podsByNode[node.Name]
+			podCount := len(pods)
+			for _, pod := range pods {
 				for _, container := range pod.Spec.Containers {
 					if req := container.Resources.Requests.Cpu(); req != nil {
 						cpuAlloc.Add(*req)
@@ -712,38 +1043,101 @@ func fetchNodeData(
 					}
 				}
 			}
-		}
 
-		if nm, ok := metricsMap[node.Name]; ok {
-			cpuUsage.Add(nm.Usage[v1.ResourceCPU])
-			memUsage.Add(nm.Usage[v1.ResourceMemory])
-		}
+			if nm, ok := metricsMap[node.Name]; ok {
+				cpuUsage.Add(nm.Usage[v1.ResourceCPU])
+				memUsage.Add(nm.Usage[v1.ResourceMemory])
+			}
 
-		rows = append(rows, []string{
-			node.Name,
-			nodeStatus,
-			formatMilliCPU(cpuCap),
-			formatMilliCPU(cpuAlloc),
-			formatMilliCPU(cpuUsage),
-			formatBytes(memCap),
-			formatBytes(memAlloc),
-			formatBytes(memUsage),
-			fmt.Sprintf("%d", podCount),
-		})
+			cpuUsagePct := float64(0)
+			if cpuCap.MilliValue() > 0 {
+				cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuCap.MilliValue()) * 100
+			}
+			memUsagePct := float64(0)
+			if memCap.Value() > 0 {
+				memUsagePct = float64(memUsage.Value()) / float64(memCap.Value()) * 100
+			}
 
-		metrics = append(metrics, ResourceMetrics{
-			CPURequest:  float64(cpuAlloc.MilliValue()) / 1000.0,
-			CPULimit:    float64(cpuCap.MilliValue()) / 1000.0,
-			CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
-			CPUCapacity: float64(cpuCap.MilliValue()) / 1000.0,
-			MemRequest:  float64(memAlloc.Value()),
-			MemLimit:    float64(memCap.Value()),
-			MemUsage:    float64(memUsage.Value()),
-			MemCapacity: float64(memCap.Value()),
-		})
+			row := []string{
+				node.Name,
+				nodeStatus,
+				formatMilliCPU(cpuCap),
+				formatMilliCPU(cpuAlloc),
+				formatMilliCPU(cpuUsage),
+				formatBytes(memCap),
+				formatBytes(memAlloc),
+				formatBytes(memUsage),
+				fmt.Sprintf("%d", podCount),
+			}
+
+			metrics := ResourceMetrics{
+				CPURequest:  float64(cpuAlloc.MilliValue()) / 1000.0,
+				CPULimit:    float64(cpuCap.MilliValue()) / 1000.0,
+				CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
+				CPUCapacity: float64(cpuCap.MilliValue()) / 1000.0,
+				MemRequest:  float64(memAlloc.Value()),
+				MemLimit:    float64(memCap.Value()),
+				MemUsage:    float64(memUsage.Value()),
+				MemCapacity: float64(memCap.Value()),
+			}
+
+			mu.Lock()
+			nodeData[idx] = nodeRowData{
+				row:      row,
+				metrics:  metrics,
+				isReady:  isReady,
+				cpuUsage: cpuUsagePct,
+				memUsage: memUsagePct,
+			}
+			mu.Unlock()
+		}(i, node)
+	}
+	wg.Wait()
+
+	// Sort based on sort mode
+	sortNodeData(nodeData, state.sortMode)
+
+	// Apply node limit
+	limit := len(nodeData)
+	if state.nodeLimit > 0 && state.nodeLimit < limit {
+		limit = state.nodeLimit
+	}
+
+	// Build final rows and metrics
+	rows := make([][]string, 0, limit)
+	metrics := make([]ResourceMetrics, 0, limit)
+	for i := 0; i < limit; i++ {
+		rows = append(rows, nodeData[i].row)
+		metrics = append(metrics, nodeData[i].metrics)
 	}
 
 	return header, rows, metrics, nil
+}
+
+// sortNodeData sorts node data based on sort mode
+func sortNodeData(data []nodeRowData, mode SortMode) {
+	switch mode {
+	case SortByStatus:
+		// NotReady nodes first, then by CPU usage descending
+		sort.Slice(data, func(i, j int) bool {
+			if data[i].isReady != data[j].isReady {
+				return !data[i].isReady // NotReady first
+			}
+			return data[i].cpuUsage > data[j].cpuUsage
+		})
+	case SortByName:
+		sort.Slice(data, func(i, j int) bool {
+			return data[i].row[0] < data[j].row[0]
+		})
+	case SortByCPU:
+		sort.Slice(data, func(i, j int) bool {
+			return data[i].cpuUsage > data[j].cpuUsage
+		})
+	case SortByMemory:
+		sort.Slice(data, func(i, j int) bool {
+			return data[i].memUsage > data[j].memUsage
+		})
+	}
 }
 
 func fetchDeploymentData(
@@ -756,7 +1150,9 @@ func fetchDeploymentData(
 		"REPLICAS", "READY", "AVAILABLE",
 	}
 
-	deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+	deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		ResourceVersion: "0",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list deployments: %w", err)
 	}
@@ -833,11 +1229,26 @@ func fetchDeploymentData(
 }
 
 func getHelpText(mode ViewMode) string {
-	base := "[n] Namespaces | [p] Pods | [o] Nodes | [d] Deployments | [b] Bars | [%] Percentages | [c] Compact | [q] Quit"
+	base := "[n]NS [p]Pods [o]Nodes [d]Deploy | [b]Bars [%]Pct [s]Sort [c]Compact | [q]Quit"
 	if mode == ViewPods || mode == ViewDeployments {
-		return base + " | [←→] Switch Namespace"
+		return base + " | [←→]NS"
 	}
 	return base
+}
+
+func getSortModeString(mode SortMode) string {
+	switch mode {
+	case SortByStatus:
+		return sortByStatus
+	case SortByName:
+		return "name"
+	case SortByCPU:
+		return "cpu"
+	case SortByMemory:
+		return "memory"
+	default:
+		return sortByStatus
+	}
 }
 
 func getMenuBar(state *LiveState) string {
@@ -854,8 +1265,16 @@ func getMenuBar(state *LiveState) string {
 		compactIcon = checkboxChecked
 	}
 
-	return fmt.Sprintf(" %s Bars [b] | %s Percentages [%%] | %s Compact [c]",
-		barsIcon, percIcon, compactIcon)
+	sortStr := getSortModeString(state.sortMode)
+
+	// Show limit info if applicable
+	limitInfo := ""
+	if state.nodeLimit > 0 && state.totalNodes > state.nodeLimit {
+		limitInfo = fmt.Sprintf(" | Showing %d/%d nodes", state.nodeLimit, state.totalNodes)
+	}
+
+	return fmt.Sprintf(" %s Bars | %s Pct | %s Compact | Sort: %s%s",
+		barsIcon, percIcon, compactIcon, sortStr, limitInfo)
 }
 
 func getModeString(mode ViewMode) string {

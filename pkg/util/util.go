@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-// SetupLogger sets configuration for the default logger
+// SetupLogger sets configuration for the default logger.
 func SetupLogger() (err error) {
 	var (
 		lf = strings.ToLower(viper.GetString("output"))
@@ -38,7 +38,7 @@ func SetupLogger() (err error) {
 	return nil
 }
 
-// ParseProviderID returns the cloud provider and associated info
+// ParseProviderID returns the cloud provider and associated info.
 func ParseProviderID(pi string) (cp string, id []string) {
 	s := strings.Split(pi, ":")
 	return s[0], strings.Split(strings.TrimPrefix(s[1], "//"), "/")

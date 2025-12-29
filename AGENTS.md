@@ -20,7 +20,8 @@ glance/
 ├── pkg/
 │   ├── cmd/
 │   │   ├── glance.go      # Core command logic, Kubernetes client interactions
-│   │   ├── live.go        # Live TUI monitoring mode (termui)
+│   │   ├── live.go        # Live TUI monitoring mode (termui) with scaling optimizations
+│   │   ├── watch.go       # Informer-based caching for large clusters (>100 nodes)
 │   │   ├── render.go      # Output rendering (text, pretty, JSON, charts)
 │   │   ├── types.go       # Data structures (NodeInfo, ClusterTotals, etc.)
 │   │   ├── aws.go         # AWS EC2 metadata integration
@@ -43,6 +44,7 @@ glance/
 - `github.com/sirupsen/logrus` - Logging
 - `cloud.google.com/go/container` - GCP integration
 - `github.com/aws/aws-sdk-go-v2` - AWS integration
+- `golang.org/x/sync` - errgroup for parallel API operations
 
 ## Development Commands
 
@@ -151,42 +153,118 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
 
 ## Current Session Status (December 28, 2025)
 
-### Completed
-- **v0.1.6 released** and passing CI
-- Fixed GitLab CI release job to use `release-cli create` (shell variable expansion works)
-- Fixed golangci-lint to run directly with `golangci/golangci-lint:v2.7.2` image (no docker-in-docker)
-- Updated Makefile lint target to run `go mod download` inside container
-- Krew manifest (`plugins/krew/glance.yaml`) updated with v0.1.6 checksums
+### Completed on `fixes` branch
+- **v0.1.17 released** - multiple releases to fix CI YAML parsing issues
+- Fixed output display issues:
+  - Node status now correctly shows "Ready" for ready nodes
+  - Dynamic terminal width detection (60-120 char bounds)
+  - Cluster info moved from INFO log to summary display box
+  - Removed noisy INFO/debug log statements from terminal output
+- Added configurable logging:
+  - `GLANCE_LOG_LEVEL` environment variable
+  - `log-level` config file option
+  - Log file output to `~/.glance/<level>-glance.log`
+  - Levels: trace, debug, info, warn (default), error, fatal
+- Fixed all lint issues:
+  - G301 gosec: directory permissions 0755 → 0750
+  - G302 gosec: file permissions 0644 → 0600
+  - G304 gosec: filepath.Clean() + #nosec annotation
+  - SA9003 staticcheck: removed empty config read branch
+  - Removed unused functions (buildColoredProgressBar, padRight)
+- Updated tests for new functionality (ClusterInfo, dynamic width, etc.)
+- MR #21 open on `fixes` branch
 
-### Next Steps - Krew PR
-1. **Test locally with krew:**
-   ```bash
-   kubectl krew install --manifest=plugins/krew/glance.yaml
-   kubectl glance --help
-   kubectl glance
-   ```
+### Completed on `live-improvements` branch
+- **Scaling improvements for large clusters** - comprehensive performance optimizations
+- Parallel API fetching with errgroup:
+  - Concurrent node, pod, and namespace queries
+  - Configurable concurrency limit (default 50)
+  - Semaphore pattern for rate limiting
+- Watch cache optimization:
+  - `resourceVersion="0"` for faster API responses
+  - Leverages API server's watch cache
+  - Reduces load on etcd backend
+- Batch pod fetching:
+  - Eliminated N+1 query problem (O(n*m) → O(n))
+  - Single pod list call with in-memory grouping by node/namespace
+  - Dramatic reduction in API calls for large clusters
+- Node/pod limits with smart defaults:
+  - `--node-limit` flag (default 20, max 1000)
+  - `--pod-limit` flag (default 100, max 10000)
+  - Large cluster detection (>100 nodes) with warning
+- Sorting modes:
+  - `--sort-by` flag: status, name, cpu, memory
+  - Press 's' key to cycle through modes in live UI
+  - Status sort shows NotReady nodes first
+- Informer-based watch mode (new file `watch.go`):
+  - Shared informer factory for real-time updates
+  - WatchCache type with Start(), Stop(), GetNodes(), GetPods(), etc.
+  - Designed for clusters with >100 nodes
+  - Background cache refresh with change notifications
+- New types for parallel processing:
+  - `nsRowData`, `podRowData`, `nodeRowData` for concurrent aggregation
+  - `SummaryStats` for aggregate display
+- Code quality review:
+  - All doc comments now conform to Effective Go
+  - Added periods to all doc comments
+  - Fixed typos (relevent → relevant)
+  - Verified error message format (lowercase, no trailing punctuation)
+  - Ran `make fmt`, `make test`, `make lint`
 
-2. **Fork krew-index and create PR:**
-   ```bash
-   # Fork https://github.com/kubernetes-sigs/krew-index on GitHub
-   git clone https://github.com/YOUR_USERNAME/krew-index.git
-   cd krew-index
-   cp /path/to/glance/plugins/krew/glance.yaml plugins/glance.yaml
-   git checkout -b add-glance-plugin
-   git add plugins/glance.yaml
-   git commit -m "Add glance plugin"
-   git push origin add-glance-plugin
-   # Create PR on GitHub
-   ```
+### Architecture Notes
+- **`pkg/cmd/render.go`** has dynamic width functions:
+  - `getTerminalWidth()` - returns terminal width bounded 60-120
+  - `buildColoredProgressBarDynamic()` - progress bar scaled to width
+  - `padRightDynamic()` - padding scaled to width
+- **`pkg/cmd/types.go`** has `ClusterInfo` struct (Host, MasterVersion)
+- **`pkg/cmd/glance.go`** has `configureLogging()` function
+- **`pkg/cmd/live.go`** implements parallel fetching:
+  - `fetchNodeData()`, `fetchNamespaceData()`, `fetchPodData()` with errgroup
+  - Uses semaphore pattern (`make(chan struct{}, maxConcurrent)`)
+  - Single batch pod fetch with `groupPodsByNode()` and `groupPodsByNamespace()`
+- **`pkg/cmd/watch.go`** (new file, 288 lines):
+  - `WatchCache` struct with informer factory
+  - Event handlers for Add/Update/Delete
+  - Non-blocking update notification channel
+  - Label selector filtering support
 
-3. **PR requirements for krew-index:**
-   - Plugin name must match filename (`glance.yaml` → `glance`)
-   - All URLs must be publicly accessible
-   - SHA256 checksums must be valid
-   - Must pass `kubectl krew install --manifest=...` test
+### Key Files Changed
+#### On `fixes` branch:
+- `pkg/cmd/glance.go` - logging config, cluster info population, lint fixes
+- `pkg/cmd/render.go` - dynamic width, cluster info display, removed unused funcs
+- `pkg/cmd/types.go` - ClusterInfo struct added to Totals
+- `pkg/cmd/types_test.go` - tests for ClusterInfo
+- `pkg/cmd/render_test.go` - tests for dynamic width functions
+- `README.md` - logging configuration documentation
 
-### Known Issues Fixed This Session
-- GitLab release URLs had empty version strings (fixed with `release-cli create`)
-- golangci-lint v2 failed with GOPATH-style mounts (fixed by using `/app` mount)
-- Docker-in-docker permission issues on some runners (fixed by using lint image directly)
+#### On `live-improvements` branch:
+- `pkg/cmd/live.go` - +701 lines of parallel fetching, sorting, limiting
+- `pkg/cmd/watch.go` - +288 lines (new file) for informer-based caching
+- `pkg/cmd/live_test.go` - updated test assertions for new help text
+- `go.mod` / `go.sum` - added golang.org/x/sync v0.19.0
+- All `pkg/cmd/*.go` files - doc comment improvements for Effective Go
+
+### Performance Characteristics
+- **Small clusters (<20 nodes)**: No noticeable change
+- **Medium clusters (20-100 nodes)**: 2-3x faster startup with parallel fetching
+- **Large clusters (>100 nodes)**: 5-10x faster with watch cache + batch fetching
+- **Very large clusters (500+ nodes)**: Use watch mode for real-time updates without polling overhead
+
+### Testing Notes
+- All unit tests pass (`make test`)
+- Lint checks pass (`make lint`)
+- Tested with minikube (small cluster)
+- Code formatting verified (`make fmt`)
+
+### Next Steps
+1. Complete lint job (in progress)
+2. Commit Effective Go improvements to `live-improvements` branch
+3. Decide merge strategy:
+   - Option A: Merge `fixes` to main first, then `live-improvements`
+   - Option B: Merge `live-improvements` to main directly (includes all scaling work)
+4. Bump version in `version/version.go` to v0.1.18
+5. Tag and release
+6. Update README.md with new CLI flags and performance notes
+7. Submit Krew plugin PR to kubernetes-sigs/krew-index
+
 

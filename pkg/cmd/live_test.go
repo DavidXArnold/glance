@@ -114,9 +114,12 @@ func TestGetHelpText(t *testing.T) {
 			if !contains(result, "[c]") {
 				t.Errorf("getHelpText() should contain [c] for compact toggle")
 			}
+			if !contains(result, "[s]") {
+				t.Errorf("getHelpText() should contain [s] for sort toggle")
+			}
 
 			// Check namespace navigation for appropriate modes
-			if tt.shouldHaveNS && !contains(result, "Switch Namespace") {
+			if tt.shouldHaveNS && !contains(result, "NS") {
 				t.Errorf("getHelpText(%v) should contain namespace navigation", tt.mode)
 			}
 		})
@@ -341,9 +344,9 @@ func TestGetMenuBar(t *testing.T) {
 		t.Errorf("getMenuBar() should contain unchecked box for disabled options")
 	}
 
-	// Should mention the keys
-	if !contains(menu, "[b]") || !contains(menu, "[%]") || !contains(menu, "[c]") {
-		t.Errorf("getMenuBar() should mention toggle keys")
+	// Should show sort mode and bar/pct indicators
+	if !contains(menu, "Bars") || !contains(menu, "Pct") || !contains(menu, "Sort") {
+		t.Errorf("getMenuBar() should show status indicators")
 	}
 }
 

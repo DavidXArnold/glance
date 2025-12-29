@@ -22,15 +22,14 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// GlanceOptions contains options and configurations needed by glance
+// GlanceConfig contains options and configurations needed by glance.
 type GlanceConfig struct {
 	configFlags *genericclioptions.ConfigFlags
 	restConfig  *rest.Config
 	genericclioptions.IOStreams
 }
 
-// nolint unused
-// NodeStats is an object to hold relevent node stats
+// NodeStats holds relevant node statistics including resource allocation and usage.
 type NodeStats struct {
 	Status                  string              `json:",omitempty"`
 	ProviderID              string              `json:",omitempty"`
@@ -49,8 +48,10 @@ type NodeStats struct {
 	PodInfo                 map[string]*PodInfo `json:",omitempty"`
 }
 
+// NodeMap is a map of node names to their statistics.
 type NodeMap map[string]*NodeStats
 
+// PodInfo holds pod-level resource information including QoS and usage.
 type PodInfo struct {
 	Qos         *v1.PodQOSClass    `json:",omitempty"`
 	PodReqs     *v1.ResourceList   `json:",omitempty"`
@@ -59,22 +60,20 @@ type PodInfo struct {
 	UsageMemory *resource.Quantity `json:",omitempty"`
 }
 
+// cloudInfo holds cloud provider specific information for nodes.
 type cloudInfo struct {
-	Aws *ec2.DescribeInstancesOutput `json:",omitempty"`
-	//nolint unused
-	Gce *containerpb.NodePool `json:",omitempty"`
-	//nolint unused
-	Azure map[string]string `json:",omitempty"`
+	Aws   *ec2.DescribeInstancesOutput `json:",omitempty"`
+	Gce   *containerpb.NodePool        `json:",omitempty"`
+	Azure map[string]string            `json:",omitempty"`
 }
 
-// ClusterInfo holds metadata about the cluster
+// ClusterInfo holds metadata about the cluster.
 type ClusterInfo struct {
 	Host          string `json:",omitempty"`
 	MasterVersion string `json:",omitempty"`
 }
 
-// nolint unused
-// Totals is an object to hold totals
+// Totals holds aggregate resource statistics across the entire cluster.
 type Totals struct {
 	ClusterInfo                  ClusterInfo        `json:",omitempty"`
 	TotalAllocatableCPU          *resource.Quantity `json:",omitempty"`
@@ -89,7 +88,7 @@ type Totals struct {
 	TotalUsageMemory             *resource.Quantity `json:",omitempty"`
 }
 
-// Glance is an object that holds nodemaps and totals
+// Glance holds the complete cluster state including per-node statistics and totals.
 type Glance struct {
 	Nodes  NodeMap
 	Totals Totals
