@@ -59,6 +59,9 @@ const (
 	nodeStatusReady    = "Ready"
 	nodeStatusNotReady = "NotReady"
 
+	// Sort mode string constant
+	sortByStatus = "status"
+
 	// Progress bar thresholds
 	thresholdLow      = 50.0
 	thresholdMedium   = 75.0
@@ -158,7 +161,7 @@ Controls will be displayed at the bottom of the screen.`,
 				sortMode = SortByCPU
 			case "memory", "mem":
 				sortMode = SortByMemory
-			case "status":
+			case sortByStatus:
 				sortMode = SortByStatus
 			}
 
@@ -174,7 +177,7 @@ Controls will be displayed at the bottom of the screen.`,
 		"Maximum pods to display per view (0 for unlimited)")
 	cmd.Flags().IntVar(&maxConcurrent, "max-concurrent", defaultMaxConcurrent,
 		"Maximum concurrent API requests")
-	cmd.Flags().StringVar(&sortBy, "sort-by", "status",
+	cmd.Flags().StringVar(&sortBy, "sort-by", sortByStatus,
 		"Sort by: status, name, cpu, memory")
 
 	return cmd
@@ -317,7 +320,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	case ViewNodes:
 		header, data, metrics, err = fetchNodeData(ctx, k8sClient, gc, state)
 	case ViewDeployments:
-		header, data, metrics, err = fetchDeploymentData(ctx, k8sClient, state.selectedNamespace, state)
+		header, data, metrics, err = fetchDeploymentData(ctx, k8sClient, state.selectedNamespace)
 	}
 
 	if err != nil {
@@ -1141,7 +1144,6 @@ func fetchDeploymentData(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
 	namespace string,
-	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
 		"DEPLOYMENT", "STATUS", "CPU REQ", "CPU LIMIT", "MEM REQ", "MEM LIMIT",
@@ -1237,7 +1239,7 @@ func getHelpText(mode ViewMode) string {
 func getSortModeString(mode SortMode) string {
 	switch mode {
 	case SortByStatus:
-		return "status"
+		return sortByStatus
 	case SortByName:
 		return "name"
 	case SortByCPU:
@@ -1245,7 +1247,7 @@ func getSortModeString(mode SortMode) string {
 	case SortByMemory:
 		return "memory"
 	default:
-		return "status"
+		return sortByStatus
 	}
 }
 
