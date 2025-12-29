@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"k8s.io/client-go/tools/clientcmd"
@@ -70,9 +72,64 @@ func initConfig() {
 
 	viper.AutomaticEnv() // read in environment variables that match
 
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		log.Println("Using config file:", viper.ConfigFileUsed())
+	// If a config file is found, read it in (ignore errors - config is optional)
+	_ = viper.ReadInConfig()
+
+	// Configure logging after config is loaded
+	configureLogging()
+}
+
+// configureLogging sets up logging based on GLANCE_LOG_LEVEL env var or config file
+func configureLogging() {
+	// Get log level from environment variable or config file
+	// Environment variable takes precedence
+	logLevel := os.Getenv("GLANCE_LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = viper.GetString("log-level")
+	}
+	if logLevel == "" {
+		logLevel = "warn" // default to warn - minimal output
+	}
+	logLevel = strings.ToLower(logLevel)
+
+	// Parse and set log level
+	level, err := log.ParseLevel(logLevel)
+	if err != nil {
+		level = log.WarnLevel
+		logLevel = "warn"
+	}
+	log.SetLevel(level)
+
+	// Only create log file if level is debug, info, or trace (not for warn/error/fatal)
+	if level <= log.InfoLevel {
+		// Determine log directory - prefer ~/.glance/, fall back to /tmp
+		logDir := ""
+		home, err := homedir.Dir()
+		if err == nil {
+			glanceDir := filepath.Join(home, ".glance")
+			if err := os.MkdirAll(glanceDir, 0750); err == nil {
+				logDir = glanceDir
+			}
+		}
+		if logDir == "" {
+			logDir = os.TempDir()
+		}
+
+		// Create log file: <log-level>-glance.log
+		logFileName := fmt.Sprintf("%s-glance.log", logLevel)
+		logFilePath := filepath.Clean(filepath.Join(logDir, logFileName))
+
+		// #nosec G304 -- path is constructed from controlled inputs (home dir + fixed filename)
+		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if err == nil {
+			log.SetOutput(logFile)
+			log.SetFormatter(&log.TextFormatter{
+				FullTimestamp: true,
+			})
+		}
+	} else {
+		// For warn/error/fatal, discard logs (don't clutter terminal output)
+		log.SetOutput(os.Stderr)
 	}
 }
 
@@ -204,6 +261,12 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		log.Fatalf(" %+v ", err.Error())
 	}
 
+	// Set cluster info for display in summary
+	c.ClusterInfo = ClusterInfo{
+		Host:          gc.restConfig.Host,
+		MasterVersion: k8sver.GitVersion,
+	}
+
 	nodes, err := getNodes(ctx, k8sClient)
 	if err != nil {
 		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
@@ -212,11 +275,6 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	if len(nodes.Items) == 0 {
 		return fmt.Errorf("no Nodes found")
 	}
-
-	log.WithFields(log.Fields{
-		"Host":           gc.restConfig.Host,
-		"Master Version": k8sver.GitVersion,
-	}).Infof("There are %d node(s) in the cluster", len(nodes.Items))
 
 	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
 	if err != nil {
@@ -258,6 +316,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		}
 
 		nm[nn] = describeNodeResource(podList)
+		nm[nn].Status = "Ready"
 
 		if nodes.Items[i].Spec.ProviderID != "" {
 			nm[nn].ProviderID = nodes.Items[i].Spec.ProviderID
@@ -376,8 +435,7 @@ func getPodsInfo(
 	podMap := make(map[string]*PodInfo)
 	for i := range podList.Items {
 		n := podList.Items[i].Name
-		pml, _ := getPodMetricsFromMetricsAPI(ctx, metricsClient, n, getNamespace(), selector)
-		log.Infof("pml: %+v", pml.Items)
+		_, _ = getPodMetricsFromMetricsAPI(ctx, metricsClient, n, getNamespace(), selector)
 	}
 	return podMap
 }
@@ -386,8 +444,6 @@ func getLabelSelector() (labels.Selector, error) {
 	labelSelector := labels.Everything()
 	ls := viper.GetString("selector")
 	fs := viper.GetString("field-selector")
-
-	log.Printf(" %+v ", ls+" "+fs)
 
 	if fs != "" || ls != "" {
 		var err error
@@ -522,7 +578,7 @@ func getCloudInfo(n *v1.Node, ns *NodeStats) {
 		case "gce":
 			ns.CloudInfo.Gce = getGKENodePool(id[1])
 		case "azure":
-			log.Info("azure not yet implemented")
+			// Azure support not yet implemented
 		default:
 			log.Warnf("Unknown cloud provider: %v", cp)
 		}

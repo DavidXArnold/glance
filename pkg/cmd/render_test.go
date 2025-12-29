@@ -21,6 +21,72 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+func TestGetTerminalWidth(t *testing.T) {
+	width := getTerminalWidth()
+
+	// Should return a value within bounds
+	if width < minBoxWidth {
+		t.Errorf("getTerminalWidth() = %d, want >= %d", width, minBoxWidth)
+	}
+
+	if width > maxBoxWidth {
+		t.Errorf("getTerminalWidth() = %d, want <= %d", width, maxBoxWidth)
+	}
+}
+
+func TestBuildColoredProgressBarDynamic(t *testing.T) {
+	tests := []struct {
+		name  string
+		pct   float64
+		width int
+	}{
+		{"0%", 0, 20},
+		{"50%", 50, 20},
+		{"75%", 75, 20},
+		{"90%", 90, 20},
+		{"100%", 100, 20},
+		{"negative", -10, 20},
+		{"over 100", 150, 20},
+		{"small width", 50, 5},
+		{"large width", 50, 40},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bar := buildColoredProgressBarDynamic(tt.pct, tt.width)
+			if bar == "" {
+				t.Errorf("buildColoredProgressBarDynamic(%f, %d) returned empty string", tt.pct, tt.width)
+			}
+			// Bar should contain brackets
+			if bar[0] != '[' || bar[len(bar)-1] != ']' {
+				t.Errorf("buildColoredProgressBarDynamic should return bar with brackets, got %q", bar)
+			}
+		})
+	}
+}
+
+func TestPadRightDynamic(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		width  int
+		minLen int
+	}{
+		{"short string", "test", 20, 21},
+		{"exact width", "exactly twenty chars", 20, 20},
+		{"longer than width", "this string is longer than the width", 20, 36}, // no padding added
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := padRightDynamic(tt.input, tt.width)
+			if len(result) < tt.minLen {
+				t.Errorf("padRightDynamic(%q, %d) = len %d, want >= %d", tt.input, tt.width, len(result), tt.minLen)
+			}
+		})
+	}
+}
+
 func TestRenderJSONOutput(t *testing.T) {
 	nm := make(NodeMap)
 	nm["test-node"] = &NodeStats{
