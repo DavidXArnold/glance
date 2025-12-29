@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// WatchCache provides cached cluster data using informers for real-time updates
+// WatchCache provides cached cluster data using informers for real-time updates.
 type WatchCache struct {
 	mu sync.RWMutex
 
@@ -48,7 +48,7 @@ type WatchCache struct {
 	podCount   int
 }
 
-// NewWatchCache creates a new informer-based cache for cluster data
+// NewWatchCache creates a new informer-based cache for cluster data.
 func NewWatchCache(k8sClient *kubernetes.Clientset, resyncPeriod time.Duration) *WatchCache {
 	wc := &WatchCache{
 		stopCh:   make(chan struct{}),
@@ -85,7 +85,7 @@ func NewWatchCache(k8sClient *kubernetes.Clientset, resyncPeriod time.Duration) 
 	return wc
 }
 
-// Start begins the informer sync process
+// Start begins the informer sync process.
 func (wc *WatchCache) Start(ctx context.Context) error {
 	// Start the informer factory
 	wc.factory.Start(wc.stopCh)
@@ -106,17 +106,17 @@ func (wc *WatchCache) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the informers
+// Stop stops the informers.
 func (wc *WatchCache) Stop() {
 	close(wc.stopCh)
 }
 
-// Updates returns a channel that receives notifications when data changes
+// Updates returns a channel that receives notifications when data changes.
 func (wc *WatchCache) Updates() <-chan struct{} {
 	return wc.updateCh
 }
 
-// notifyUpdate sends a non-blocking notification of data change
+// notifyUpdate sends a non-blocking notification of data change.
 func (wc *WatchCache) notifyUpdate() {
 	wc.refreshData()
 	select {
@@ -126,7 +126,7 @@ func (wc *WatchCache) notifyUpdate() {
 	}
 }
 
-// refreshData updates the cached data from informers
+// refreshData updates the cached data from informers.
 func (wc *WatchCache) refreshData() {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
@@ -169,7 +169,7 @@ func (wc *WatchCache) refreshData() {
 	wc.lastUpdate = time.Now()
 }
 
-// GetNodes returns a copy of cached nodes
+// GetNodes returns a copy of cached nodes.
 func (wc *WatchCache) GetNodes() []v1.Node {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
@@ -178,7 +178,7 @@ func (wc *WatchCache) GetNodes() []v1.Node {
 	return result
 }
 
-// GetPods returns a copy of cached pods
+// GetPods returns a copy of cached pods.
 func (wc *WatchCache) GetPods() []v1.Pod {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
@@ -187,7 +187,7 @@ func (wc *WatchCache) GetPods() []v1.Pod {
 	return result
 }
 
-// GetPodsByNode returns pods grouped by node name
+// GetPodsByNode returns pods grouped by node name.
 func (wc *WatchCache) GetPodsByNode() map[string][]v1.Pod {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
@@ -201,7 +201,7 @@ func (wc *WatchCache) GetPodsByNode() map[string][]v1.Pod {
 	return result
 }
 
-// GetPodsByNamespace returns pods grouped by namespace
+// GetPodsByNamespace returns pods grouped by namespace.
 func (wc *WatchCache) GetPodsByNamespace() map[string][]v1.Pod {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
@@ -213,7 +213,7 @@ func (wc *WatchCache) GetPodsByNamespace() map[string][]v1.Pod {
 	return result
 }
 
-// GetNamespaces returns a copy of cached namespaces
+// GetNamespaces returns a copy of cached namespaces.
 func (wc *WatchCache) GetNamespaces() []v1.Namespace {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
@@ -222,14 +222,14 @@ func (wc *WatchCache) GetNamespaces() []v1.Namespace {
 	return result
 }
 
-// GetStats returns cache statistics
+// GetStats returns cache statistics.
 func (wc *WatchCache) GetStats() (nodeCount, podCount int, lastUpdate time.Time) {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
 	return wc.nodeCount, wc.podCount, wc.lastUpdate
 }
 
-// GetNodeByName returns a specific node by name
+// GetNodeByName returns a specific node by name.
 func (wc *WatchCache) GetNodeByName(name string) (*v1.Node, bool) {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
@@ -243,7 +243,7 @@ func (wc *WatchCache) GetNodeByName(name string) (*v1.Node, bool) {
 	return nil, false
 }
 
-// ListNodesWithSelector returns nodes matching a label selector
+// ListNodesWithSelector returns nodes matching a label selector.
 func (wc *WatchCache) ListNodesWithSelector(selector string) ([]v1.Node, error) {
 	if selector == "" {
 		return wc.GetNodes(), nil

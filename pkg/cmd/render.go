@@ -42,7 +42,7 @@ const (
 
 const ctlC = "<C-c>"
 
-// formatQuantity returns a human-readable or exact representation of a quantity pointer
+// formatQuantity returns a human-readable or exact representation of a quantity pointer.
 func formatQuantity(q *resource.Quantity) string {
 	if q == nil {
 		return ""
@@ -57,7 +57,7 @@ func formatQuantity(q *resource.Quantity) string {
 	return q.String()
 }
 
-// formatQuantityValue returns a human-readable or exact representation of a quantity value
+// formatQuantityValue returns a human-readable or exact representation of a quantity value.
 func formatQuantityValue(q resource.Quantity) string {
 	if viper.GetBool("exact") {
 		// Exact value mode - show the raw value
@@ -188,7 +188,7 @@ func renderPretty(nm *NodeMap, c *Totals) {
 	os.Exit(0)
 }
 
-// getTerminalWidth returns the terminal width, clamped between min and max
+// getTerminalWidth returns the terminal width, clamped between min and max.
 func getTerminalWidth() int {
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || width <= 0 {
@@ -203,7 +203,7 @@ func getTerminalWidth() int {
 	return width
 }
 
-// printClusterSummary prints a dashboard header with cluster overview
+// printClusterSummary prints a dashboard header with cluster overview.
 func printClusterSummary(nm *NodeMap, c *Totals) {
 	readyCount := 0
 	notReadyCount := 0
@@ -298,7 +298,7 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 	fmt.Println(boxStyle.Sprint(botBorder))
 }
 
-// buildColoredProgressBarDynamic creates a colored progress bar with dynamic width
+// buildColoredProgressBarDynamic creates a colored progress bar with dynamic width.
 func buildColoredProgressBarDynamic(pct float64, width int) string {
 	if pct < 0 {
 		pct = 0
@@ -328,7 +328,7 @@ func buildColoredProgressBarDynamic(pct float64, width int) string {
 	return "[" + bar + "]"
 }
 
-// padRightDynamic pads a string to the specified width (accounting for ANSI codes)
+// padRightDynamic pads a string to the specified width (accounting for ANSI codes).
 func padRightDynamic(s string, width int) string {
 	visibleLen := text.RuneWidthWithoutEscSequences(s)
 	if visibleLen >= width+1 { // +1 for the closing border
@@ -337,7 +337,7 @@ func padRightDynamic(s string, width int) string {
 	return s + strings.Repeat(" ", width+1-visibleLen)
 }
 
-// buildSparkline creates a mini sparkline showing trend
+// buildSparkline creates a mini sparkline showing trend.
 func buildSparkline(values ...float64) string {
 	chars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
@@ -368,7 +368,7 @@ func buildSparkline(values ...float64) string {
 	return result
 }
 
-// buildCPUUtilizationCell creates a detailed CPU utilization cell
+// buildCPUUtilizationCell creates a detailed CPU utilization cell.
 func buildCPUUtilizationCell(v *NodeStats) string {
 	if v.AllocatableCPU == nil || v.AllocatableCPU.IsZero() {
 		return "N/A"
@@ -390,7 +390,7 @@ func buildCPUUtilizationCell(v *NodeStats) string {
 		formatQuantityValue(v.AllocatedCPULimits))
 }
 
-// buildMemUtilizationCell creates a detailed memory utilization cell
+// buildMemUtilizationCell creates a detailed memory utilization cell.
 func buildMemUtilizationCell(v *NodeStats) string {
 	if v.AllocatableMemory == nil || v.AllocatableMemory.IsZero() {
 		return "N/A"

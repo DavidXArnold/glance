@@ -82,7 +82,7 @@ const (
 	SortByMemory
 )
 
-// ResourceMetrics holds the resource values and capacity for progress bars
+// ResourceMetrics holds the resource values and capacity for progress bars.
 type ResourceMetrics struct {
 	CPURequest  float64
 	CPULimit    float64
@@ -386,7 +386,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	return nil
 }
 
-// SummaryStats holds aggregate statistics for the summary bar
+// SummaryStats holds aggregate statistics for the summary bar.
 type SummaryStats struct {
 	TotalItems    int
 	AvgCPUUsage   float64
@@ -548,7 +548,7 @@ func safePercentage(value, capacity float64) float64 {
 	return (value / capacity) * 100
 }
 
-// nsRowData holds data for a single namespace row (used for parallel processing)
+// nsRowData holds data for a single namespace row for parallel processing.
 type nsRowData struct {
 	row      []string
 	metrics  ResourceMetrics
@@ -735,7 +735,7 @@ func fetchNamespaceData(
 	return header, rows, metrics, nil
 }
 
-// podRowData holds data for a single pod row (used for sorting)
+// podRowData holds data for a single pod row for sorting and limiting.
 type podRowData struct {
 	row       []string
 	metrics   ResourceMetrics
@@ -911,7 +911,7 @@ func fetchPodData(
 	return header, rows, metrics, nil
 }
 
-// nodeRowData holds data for a single node row (used for parallel processing)
+// nodeRowData holds data for a single node row for parallel processing.
 type nodeRowData struct {
 	row      []string
 	metrics  ResourceMetrics

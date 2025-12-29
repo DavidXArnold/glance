@@ -133,7 +133,7 @@ func configureLogging() {
 	}
 }
 
-// NewGlanceConfig provides an instance of GlanceConfig with default values
+// NewGlanceConfig provides an instance of GlanceConfig with default values.
 func NewGlanceConfig() (gc *GlanceConfig, err error) {
 	cf := genericclioptions.NewConfigFlags(true)
 	rc, err := cf.ToRESTConfig()
@@ -147,7 +147,7 @@ func NewGlanceConfig() (gc *GlanceConfig, err error) {
 	}, err
 }
 
-// NewGlanceCmd provides a cobra command
+// setupGlanceFlags configures persistent flags for the glance command.
 func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *string, cloudInfo, pods *bool) {
 	cmd.PersistentFlags().StringVar(
 		fieldSelector, "field-selector", "",
@@ -182,6 +182,7 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	_ = viper.BindPFlags(cmd.Flags())
 }
 
+// NewGlanceCmd creates and configures the main glance cobra command.
 func NewGlanceCmd() *cobra.Command {
 	var (
 		labelSelector string
@@ -239,6 +240,7 @@ func NewGlanceCmd() *cobra.Command {
 }
 
 // GlanceK8s displays cluster information for a given clientset
+// GlanceK8s performs the core glance operation on a Kubernetes cluster.
 // nolint gocyclo
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	ctx := context.Background()
