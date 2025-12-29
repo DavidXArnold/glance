@@ -72,10 +72,8 @@ func initConfig() {
 
 	viper.AutomaticEnv() // read in environment variables that match
 
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		// Config file found, logging will be configured after this
-	}
+	// If a config file is found, read it in (ignore errors - config is optional)
+	_ = viper.ReadInConfig()
 
 	// Configure logging after config is loaded
 	configureLogging()
@@ -109,7 +107,7 @@ func configureLogging() {
 		home, err := homedir.Dir()
 		if err == nil {
 			glanceDir := filepath.Join(home, ".glance")
-			if err := os.MkdirAll(glanceDir, 0755); err == nil {
+			if err := os.MkdirAll(glanceDir, 0750); err == nil {
 				logDir = glanceDir
 			}
 		}
@@ -121,7 +119,7 @@ func configureLogging() {
 		logFileName := fmt.Sprintf("%s-glance.log", logLevel)
 		logFilePath := filepath.Join(logDir, logFileName)
 
-		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err == nil {
 			log.SetOutput(logFile)
 			log.SetFormatter(&log.TextFormatter{

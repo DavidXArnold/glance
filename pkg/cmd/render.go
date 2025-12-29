@@ -337,37 +337,6 @@ func padRightDynamic(s string, width int) string {
 	return s + strings.Repeat(" ", width+1-visibleLen)
 }
 
-// buildColoredProgressBar creates a colored progress bar based on percentage
-func buildColoredProgressBar(pct float64) string {
-	const width = 30
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
-
-	filled := int(pct / 100 * float64(width))
-	empty := width - filled
-
-	var color text.Colors
-	switch {
-	case pct >= 90:
-		color = text.Colors{text.FgRed, text.Bold}
-	case pct >= 75:
-		color = text.Colors{text.FgYellow}
-	case pct >= 50:
-		color = text.Colors{text.FgHiYellow}
-	default:
-		color = text.Colors{text.FgGreen}
-	}
-
-	bar := color.Sprint(strings.Repeat("█", filled)) +
-		text.Colors{text.FgHiBlack}.Sprint(strings.Repeat("░", empty))
-
-	return "[" + bar + "]"
-}
-
 // buildSparkline creates a mini sparkline showing trend
 func buildSparkline(values ...float64) string {
 	chars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
@@ -510,16 +479,6 @@ func calculatePercentageFromQuantities(used, total *resource.Quantity) float64 {
 		return 0
 	}
 	return float64(used.MilliValue()) / float64(total.MilliValue()) * 100
-}
-
-// padRight pads a string to 79 characters (accounting for ANSI codes)
-func padRight(s string, _ int) string {
-	const width = 79
-	visibleLen := text.RuneWidthWithoutEscSequences(s)
-	if visibleLen >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-visibleLen)
 }
 
 // centerText centers a string within a given width
