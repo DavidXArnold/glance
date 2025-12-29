@@ -27,10 +27,17 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	// needed to authenticate with GCP
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+)
+
+const (
+	minBoxWidth     = 60
+	maxBoxWidth     = 120
+	defaultBoxWidth = 80
 )
 
 const ctlC = "<C-c>"
@@ -181,6 +188,21 @@ func renderPretty(nm *NodeMap, c *Totals) {
 	os.Exit(0)
 }
 
+// getTerminalWidth returns the terminal width, clamped between min and max
+func getTerminalWidth() int {
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width <= 0 {
+		return defaultBoxWidth
+	}
+	if width < minBoxWidth {
+		return minBoxWidth
+	}
+	if width > maxBoxWidth {
+		return maxBoxWidth
+	}
+	return width
+}
+
 // printClusterSummary prints a dashboard header with cluster overview
 func printClusterSummary(nm *NodeMap, c *Totals) {
 	readyCount := 0
@@ -199,62 +221,120 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 	cpuAllocPct := calculatePercentage(c.TotalAllocatedCPUrequests, c.TotalAllocatableCPU)
 	memAllocPct := calculatePercentage(c.TotalAllocatedMemoryRequests, c.TotalAllocatableMemory)
 
+	// Get dynamic box width
+	boxWidth := getTerminalWidth() - 2 // -2 for the border chars
+	innerWidth := boxWidth - 2         // -2 for left/right padding inside box
+
 	fmt.Println()
 	boxStyle := text.Colors{text.FgHiWhite, text.Bold}
-	topBorder := "╔" + strings.Repeat("═", 78) + "╗"
-	midBorder := "╠" + strings.Repeat("═", 78) + "╣"
-	botBorder := "╚" + strings.Repeat("═", 78) + "╝"
-	titleLine := "║" + centerText("🔍 KUBERNETES CLUSTER GLANCE", 78) + "║"
+	topBorder := "╔" + strings.Repeat("═", boxWidth) + "╗"
+	midBorder := "╠" + strings.Repeat("═", boxWidth) + "╣"
+	botBorder := "╚" + strings.Repeat("═", boxWidth) + "╝"
+	titleLine := "║" + centerText("🔍 KUBERNETES CLUSTER GLANCE", boxWidth) + "║"
 
 	fmt.Println(boxStyle.Sprint(topBorder))
 	fmt.Println(boxStyle.Sprint(titleLine))
 	fmt.Println(boxStyle.Sprint(midBorder))
 
+	// Cluster info line
+	clusterInfo := fmt.Sprintf("║  Host: %s  │  Version: %s",
+		text.Colors{text.FgCyan}.Sprint(c.ClusterInfo.Host),
+		text.Colors{text.FgCyan}.Sprint(c.ClusterInfo.MasterVersion))
+	fmt.Println(padRightDynamic(clusterInfo, boxWidth) + "║")
+
 	// Node status line
-	nodeStatus := fmt.Sprintf("║  Nodes: %s %d Ready  ", text.Colors{text.FgGreen}.Sprint("●"), readyCount)
+	nodeStatus := fmt.Sprintf("║  Nodes: %s %d Ready",
+		text.Colors{text.FgGreen}.Sprint("●"), readyCount)
 	if notReadyCount > 0 {
-		nodeStatus += fmt.Sprintf("%s %d NotReady  ", text.Colors{text.FgRed}.Sprint("●"), notReadyCount)
+		nodeStatus += fmt.Sprintf("  %s %d NotReady", text.Colors{text.FgRed}.Sprint("●"), notReadyCount)
 	}
-	nodeStatus = padRight(nodeStatus, 79) + "║"
-	fmt.Println(nodeStatus)
+	fmt.Println(padRightDynamic(nodeStatus, boxWidth) + "║")
 
 	fmt.Println(boxStyle.Sprint(midBorder))
 
+	// Calculate progress bar width dynamically
+	barWidth := (innerWidth - 50) // Leave room for labels and values
+	if barWidth < 10 {
+		barWidth = 10
+	}
+	if barWidth > 40 {
+		barWidth = 40
+	}
+
 	// CPU Usage
-	cpuUsageBar := buildColoredProgressBar(cpuUsagePct)
+	cpuUsageBar := buildColoredProgressBarDynamic(cpuUsagePct, barWidth)
 	cpuLine := fmt.Sprintf("║  CPU Usage:      %s %5.1f%%  (%s / %s)",
 		cpuUsageBar, cpuUsagePct,
 		formatQuantity(c.TotalUsageCPU),
 		formatQuantity(c.TotalAllocatableCPU))
-	fmt.Println(padRight(cpuLine, 79) + "║")
+	fmt.Println(padRightDynamic(cpuLine, boxWidth) + "║")
 
 	// CPU Allocated
-	cpuAllocBar := buildColoredProgressBar(cpuAllocPct)
+	cpuAllocBar := buildColoredProgressBarDynamic(cpuAllocPct, barWidth)
 	cpuAllocLine := fmt.Sprintf("║  CPU Allocated:  %s %5.1f%%  (%s / %s)",
 		cpuAllocBar, cpuAllocPct,
 		formatQuantity(c.TotalAllocatedCPUrequests),
 		formatQuantity(c.TotalAllocatableCPU))
-	fmt.Println(padRight(cpuAllocLine, 79) + "║")
+	fmt.Println(padRightDynamic(cpuAllocLine, boxWidth) + "║")
 
-	fmt.Println("║" + strings.Repeat(" ", 78) + "║")
+	fmt.Println("║" + strings.Repeat(" ", boxWidth) + "║")
 
 	// Memory Usage
-	memUsageBar := buildColoredProgressBar(memUsagePct)
+	memUsageBar := buildColoredProgressBarDynamic(memUsagePct, barWidth)
 	memLine := fmt.Sprintf("║  Mem Usage:      %s %5.1f%%  (%s / %s)",
 		memUsageBar, memUsagePct,
 		formatQuantity(c.TotalUsageMemory),
 		formatQuantity(c.TotalAllocatableMemory))
-	fmt.Println(padRight(memLine, 79) + "║")
+	fmt.Println(padRightDynamic(memLine, boxWidth) + "║")
 
 	// Memory Allocated
-	memAllocBar := buildColoredProgressBar(memAllocPct)
+	memAllocBar := buildColoredProgressBarDynamic(memAllocPct, barWidth)
 	memAllocLine := fmt.Sprintf("║  Mem Allocated:  %s %5.1f%%  (%s / %s)",
 		memAllocBar, memAllocPct,
 		formatQuantity(c.TotalAllocatedMemoryRequests),
 		formatQuantity(c.TotalAllocatableMemory))
-	fmt.Println(padRight(memAllocLine, 79) + "║")
+	fmt.Println(padRightDynamic(memAllocLine, boxWidth) + "║")
 
 	fmt.Println(boxStyle.Sprint(botBorder))
+}
+
+// buildColoredProgressBarDynamic creates a colored progress bar with dynamic width
+func buildColoredProgressBarDynamic(pct float64, width int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+
+	filled := int(pct / 100 * float64(width))
+	empty := width - filled
+
+	var color text.Colors
+	switch {
+	case pct >= 90:
+		color = text.Colors{text.FgRed, text.Bold}
+	case pct >= 75:
+		color = text.Colors{text.FgYellow}
+	case pct >= 50:
+		color = text.Colors{text.FgHiYellow}
+	default:
+		color = text.Colors{text.FgGreen}
+	}
+
+	bar := color.Sprint(strings.Repeat("█", filled)) +
+		text.Colors{text.FgHiBlack}.Sprint(strings.Repeat("░", empty))
+
+	return "[" + bar + "]"
+}
+
+// padRightDynamic pads a string to the specified width (accounting for ANSI codes)
+func padRightDynamic(s string, width int) string {
+	visibleLen := text.RuneWidthWithoutEscSequences(s)
+	if visibleLen >= width+1 { // +1 for the closing border
+		return s
+	}
+	return s + strings.Repeat(" ", width+1-visibleLen)
 }
 
 // buildColoredProgressBar creates a colored progress bar based on percentage
@@ -473,10 +553,14 @@ func table(nm *NodeMap, c *Totals) {
 	}
 	sort.Strings(nodeNames)
 
-	// Print header
+	// Print header with cluster info
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 120))
 	fmt.Println("  KUBERNETES CLUSTER RESOURCE OVERVIEW")
+	if c.ClusterInfo.Host != "" {
+		fmt.Printf("  Host: %s  |  Version: %s  |  Nodes: %d\n",
+			c.ClusterInfo.Host, c.ClusterInfo.MasterVersion, len(*nm))
+	}
 	fmt.Println(strings.Repeat("=", 120))
 	fmt.Println()
 

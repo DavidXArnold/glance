@@ -67,9 +67,16 @@ type cloudInfo struct {
 	Azure map[string]string `json:",omitempty"`
 }
 
+// ClusterInfo holds metadata about the cluster
+type ClusterInfo struct {
+	Host          string `json:",omitempty"`
+	MasterVersion string `json:",omitempty"`
+}
+
 // nolint unused
 // Totals is an object to hold totals
 type Totals struct {
+	ClusterInfo                  ClusterInfo        `json:",omitempty"`
 	TotalAllocatableCPU          *resource.Quantity `json:",omitempty"`
 	TotalAllocatableMemory       *resource.Quantity `json:",omitempty"`
 	TotalCapacityCPU             *resource.Quantity `json:",omitempty"`

@@ -42,6 +42,40 @@ func TestNodeStatsFields(t *testing.T) {
 	}
 }
 
+func TestClusterInfoFields(t *testing.T) {
+	info := ClusterInfo{
+		Host:          "https://127.0.0.1:6443",
+		MasterVersion: "v1.28.0",
+	}
+
+	if info.Host != "https://127.0.0.1:6443" {
+		t.Errorf("ClusterInfo.Host = %q, want %q", info.Host, "https://127.0.0.1:6443")
+	}
+
+	if info.MasterVersion != "v1.28.0" {
+		t.Errorf("ClusterInfo.MasterVersion = %q, want %q", info.MasterVersion, "v1.28.0")
+	}
+}
+
+func TestTotalsWithClusterInfo(t *testing.T) {
+	totals := &Totals{
+		ClusterInfo: ClusterInfo{
+			Host:          "https://k8s.example.com:6443",
+			MasterVersion: "v1.29.1",
+		},
+		TotalAllocatableCPU:    resource.NewMilliQuantity(8000, resource.DecimalSI),
+		TotalAllocatableMemory: resource.NewQuantity(16000000000, resource.BinarySI),
+	}
+
+	if totals.ClusterInfo.Host != "https://k8s.example.com:6443" {
+		t.Errorf("Totals.ClusterInfo.Host = %q, want %q", totals.ClusterInfo.Host, "https://k8s.example.com:6443")
+	}
+
+	if totals.ClusterInfo.MasterVersion != "v1.29.1" {
+		t.Errorf("Totals.ClusterInfo.MasterVersion = %q, want %q", totals.ClusterInfo.MasterVersion, "v1.29.1")
+	}
+}
+
 func TestTotalsCreation(t *testing.T) {
 	totals := &Totals{
 		TotalAllocatableCPU:    resource.NewMilliQuantity(0, resource.DecimalSI),

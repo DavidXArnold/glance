@@ -480,6 +480,11 @@ kubectl glance
 # Set default namespace
 export KUBECTL_NAMESPACE=my-namespace
 kubectl glance
+
+# Set log level (trace, debug, info, warn, error, fatal)
+# When set to debug or info, logs are written to ~/.glance/<level>-glance.log
+export GLANCE_LOG_LEVEL=debug
+kubectl glance
 ```
 
 ### Config File
@@ -491,7 +496,21 @@ selector: "environment=production"
 output: pretty
 cloud-info: true
 exact: false
+log-level: warn  # trace, debug, info, warn, error, fatal
 ```
+
+### Logging
+
+By default, glance uses `warn` level logging which minimizes terminal output. For debugging:
+
+- Set `GLANCE_LOG_LEVEL=debug` environment variable, or
+- Add `log-level: debug` to your `~/.glance` config file
+
+Log files are written to:
+- `~/.glance/<level>-glance.log` (preferred), or
+- `/tmp/<level>-glance.log` (fallback)
+
+Log files are only created for `trace`, `debug`, or `info` levels.
 
 ## Examples
 
