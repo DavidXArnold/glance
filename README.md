@@ -87,13 +87,17 @@ kubectl glance
 
 **Example Output:**
 ```
-INFO[0000] There are 3 node(s) in the cluster            Host="https://k8s.example.com:6443"
- NODE NAME       STATUS  PROVIDERID  ALLOCATABLE  ALLOCATABLE  ALLOCATED  ALLOCATED  ALLOCATED  ALLOCATED  USAGE   USAGE     
-                                     CPU          MEM          CPU REQ    CPU LIM    MEM REQ    MEM LIM    CPU     MEM       
- node-1          Ready   aws://...   4            8053040Ki    1.250      2.000      396Mi      1024Mi     0.186   1172Mi 
- node-2          Ready   aws://...   4            8053040Ki    2.100      3.500      512Mi      2048Mi     1.420   1856Mi
- node-3          Ready   aws://...   8            16106080Ki   3.750      6.000      1024Mi     4096Mi     2.340   3240Mi
- TOTALS                              16           32212160Ki   7.100      11.500     1932Mi     7168Mi     3.946   6268Mi
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ CLUSTER: https://k8s.example.com:6443                                        │
+│ CPU: ████████░░░░░░░░░░░░ 44.4% (7.1/16)    Nodes: 3 Ready                   │
+│ MEM: ██████░░░░░░░░░░░░░░ 19.4% (6.1/31.4Gi)                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+ NODE NAME       STATUS  PROVIDERID  ALLOCATABLE  ALLOCATABLE  ALLOCATED  ALLOCATED  USAGE   USAGE     
+                                     CPU          MEM          CPU REQ    CPU LIM    CPU     MEM       
+ node-1          Ready   aws://...   4            8053040Ki    1.250      2.000      0.186   1172Mi 
+ node-2          Ready   aws://...   4            8053040Ki    2.100      3.500      1.420   1856Mi
+ node-3          Ready   aws://...   8            16106080Ki   3.750      6.000      2.340   3240Mi
+ TOTALS                              16           32212160Ki   7.100      11.500     3.946   6268Mi
 ```
 
 #### Output Formats

@@ -152,41 +152,46 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
 ## Current Session Status (December 28, 2025)
 
 ### Completed
-- **v0.1.6 released** and passing CI
-- Fixed GitLab CI release job to use `release-cli create` (shell variable expansion works)
-- Fixed golangci-lint to run directly with `golangci/golangci-lint:v2.7.2` image (no docker-in-docker)
-- Updated Makefile lint target to run `go mod download` inside container
-- Krew manifest (`plugins/krew/glance.yaml`) updated with v0.1.6 checksums
+- **v0.1.17 released** - multiple releases to fix CI YAML parsing issues
+- Fixed output display issues:
+  - Node status now correctly shows "Ready" for ready nodes
+  - Dynamic terminal width detection (60-120 char bounds)
+  - Cluster info moved from INFO log to summary display box
+  - Removed noisy INFO/debug log statements from terminal output
+- Added configurable logging:
+  - `GLANCE_LOG_LEVEL` environment variable
+  - `log-level` config file option
+  - Log file output to `~/.glance/<level>-glance.log`
+  - Levels: trace, debug, info, warn (default), error, fatal
+- Fixed all lint issues:
+  - G301 gosec: directory permissions 0755 → 0750
+  - G302 gosec: file permissions 0644 → 0600
+  - G304 gosec: filepath.Clean() + #nosec annotation
+  - SA9003 staticcheck: removed empty config read branch
+  - Removed unused functions (buildColoredProgressBar, padRight)
+- Updated tests for new functionality (ClusterInfo, dynamic width, etc.)
+- MR #21 open on `fixes` branch
 
-### Next Steps - Krew PR
-1. **Test locally with krew:**
-   ```bash
-   kubectl krew install --manifest=plugins/krew/glance.yaml
-   kubectl glance --help
-   kubectl glance
-   ```
+### Architecture Notes
+- `pkg/cmd/render.go` has dynamic width functions:
+  - `getTerminalWidth()` - returns terminal width bounded 60-120
+  - `buildColoredProgressBarDynamic()` - progress bar scaled to width
+  - `padRightDynamic()` - padding scaled to width
+- `pkg/cmd/types.go` has `ClusterInfo` struct (Host, MasterVersion)
+- `pkg/cmd/glance.go` has `configureLogging()` function
 
-2. **Fork krew-index and create PR:**
-   ```bash
-   # Fork https://github.com/kubernetes-sigs/krew-index on GitHub
-   git clone https://github.com/YOUR_USERNAME/krew-index.git
-   cd krew-index
-   cp /path/to/glance/plugins/krew/glance.yaml plugins/glance.yaml
-   git checkout -b add-glance-plugin
-   git add plugins/glance.yaml
-   git commit -m "Add glance plugin"
-   git push origin add-glance-plugin
-   # Create PR on GitHub
-   ```
+### Key Files Changed
+- `pkg/cmd/glance.go` - logging config, cluster info population, lint fixes
+- `pkg/cmd/render.go` - dynamic width, cluster info display, removed unused funcs
+- `pkg/cmd/types.go` - ClusterInfo struct added to Totals
+- `pkg/cmd/types_test.go` - tests for ClusterInfo
+- `pkg/cmd/render_test.go` - tests for dynamic width functions
+- `README.md` - logging configuration documentation
 
-3. **PR requirements for krew-index:**
-   - Plugin name must match filename (`glance.yaml` → `glance`)
-   - All URLs must be publicly accessible
-   - SHA256 checksums must be valid
-   - Must pass `kubectl krew install --manifest=...` test
+### Next Steps
+1. Merge MR #21 to main
+2. Bump version in `version/version.go`
+3. Tag and release (v0.1.18)
+4. Submit Krew plugin PR to kubernetes-sigs/krew-index
 
-### Known Issues Fixed This Session
-- GitLab release URLs had empty version strings (fixed with `release-cli create`)
-- golangci-lint v2 failed with GOPATH-style mounts (fixed by using `/app` mount)
-- Docker-in-docker permission issues on some runners (fixed by using lint image directly)
 
