@@ -50,7 +50,7 @@ const (
 )
 
 const (
-	checkboxChecked   = "[■]"
+	checkboxChecked   = "[✓]"
 	checkboxUnchecked = "[ ]"
 	defaultNamespace  = "default"
 
