@@ -50,8 +50,8 @@ const (
 )
 
 const (
-	checkboxChecked   = "☑"
-	checkboxUnchecked = "☐"
+	checkboxChecked   = "[■]"
+	checkboxUnchecked = "[ ]"
 	defaultNamespace  = "default"
 
 	// Status icons
@@ -505,6 +505,54 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		state.mode = ViewNodes
 	case "d":
 		state.mode = ViewDeployments
+	case "b":
+		state.showBars = !state.showBars
+		viper.Set("show-bars", state.showBars)
+		_ = viper.WriteConfig()
+	case "%":
+		state.showPercentages = !state.showPercentages
+		viper.Set("show-percentages", state.showPercentages)
+		_ = viper.WriteConfig()
+	case "c":
+		state.compactMode = !state.compactMode
+		viper.Set("compact-mode", state.compactMode)
+		_ = viper.WriteConfig()
+	case "r":
+		state.showRawResources = !state.showRawResources
+		viper.Set("show-raw-resources", state.showRawResources)
+		_ = viper.WriteConfig()
+	case "i":
+		state.showCloudInfo = !state.showCloudInfo
+		viper.Set("show-cloud-provider", state.showCloudInfo)
+		_ = viper.WriteConfig()
+	case "v":
+		state.showNodeVersion = !state.showNodeVersion
+		viper.Set("show-node-version", state.showNodeVersion)
+		_ = viper.WriteConfig()
+	case "a":
+		state.showNodeAge = !state.showNodeAge
+		viper.Set("show-node-age", state.showNodeAge)
+		_ = viper.WriteConfig()
+	case "g":
+		state.showNodeGroup = !state.showNodeGroup
+		viper.Set("show-node-group", state.showNodeGroup)
+		_ = viper.WriteConfig()
+	case "1":
+		state.sortMode = SortByStatus
+		viper.Set("sort-by", "status")
+		_ = viper.WriteConfig()
+	case "2":
+		state.sortMode = SortByName
+		viper.Set("sort-by", "name")
+		_ = viper.WriteConfig()
+	case "3":
+		state.sortMode = SortByCPU
+		viper.Set("sort-by", "cpu")
+		_ = viper.WriteConfig()
+	case "4":
+		state.sortMode = SortByMemory
+		viper.Set("sort-by", "memory")
+		_ = viper.WriteConfig()
 	case "<Up>":
 		handleUpArrow(state)
 	case "<Down>":
@@ -2275,33 +2323,33 @@ func updateModalScroll(state *LiveState, totalRows, visibleRows int) {
 // buildSettingsRows creates the table rows for the settings modal.
 func buildSettingsRows(state *LiveState) [][]string {
 	rows := [][]string{
-		{"Category", "Setting", "Value"},
+		{"Category", "Setting", "Key", "Value"},
 		{},
-		{"[Display Options](fg:cyan,mod:bold)", "", ""},
-		{"", "Progress Bars", boolToCheckbox(state.pendingShowBars)},
-		{"", "Percentages", boolToCheckbox(state.pendingShowPercentages)},
-		{"", "Compact Mode", boolToCheckbox(state.pendingCompactMode)},
-		{"", "Raw Resources", boolToCheckbox(state.pendingShowRawResources)},
+		{"[Display Options](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Progress Bars", "b", boolToCheckbox(state.pendingShowBars)},
+		{"", "Percentages", "%", boolToCheckbox(state.pendingShowPercentages)},
+		{"", "Compact Mode", "c", boolToCheckbox(state.pendingCompactMode)},
+		{"", "Raw Resources", "r", boolToCheckbox(state.pendingShowRawResources)},
 		{},
-		{"[Node Columns](fg:cyan,mod:bold)", "", ""},
-		{"", "Cloud Provider Info", boolToCheckbox(state.pendingShowCloudInfo)},
-		{"", "Node Version", boolToCheckbox(state.pendingShowNodeVersion)},
-		{"", "Node Age", boolToCheckbox(state.pendingShowNodeAge)},
-		{"", "Node Group/Pool", boolToCheckbox(state.pendingShowNodeGroup)},
+		{"[Node Columns](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Cloud Provider Info", "i", boolToCheckbox(state.pendingShowCloudInfo)},
+		{"", "Node Version", "v", boolToCheckbox(state.pendingShowNodeVersion)},
+		{"", "Node Age", "a", boolToCheckbox(state.pendingShowNodeAge)},
+		{"", "Node Group/Pool", "g", boolToCheckbox(state.pendingShowNodeGroup)},
 		{},
-		{"[Sorting](fg:cyan,mod:bold)", "", ""},
-		{"", "Sort by Status", sortModeRadio(state.pendingSortMode, SortByStatus)},
-		{"", "Sort by Name", sortModeRadio(state.pendingSortMode, SortByName)},
-		{"", "Sort by CPU", sortModeRadio(state.pendingSortMode, SortByCPU)},
-		{"", "Sort by Memory", sortModeRadio(state.pendingSortMode, SortByMemory)},
+		{"[Sorting](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Sort by Status", "1", sortModeRadio(state.pendingSortMode, SortByStatus)},
+		{"", "Sort by Name", "2", sortModeRadio(state.pendingSortMode, SortByName)},
+		{"", "Sort by CPU", "3", sortModeRadio(state.pendingSortMode, SortByCPU)},
+		{"", "Sort by Memory", "4", sortModeRadio(state.pendingSortMode, SortByMemory)},
 		{},
-		{"[Limits](fg:cyan,mod:bold)", "", ""},
-		{"", "Node Limit (←/→ adjust)", fmt.Sprintf("%d", state.pendingNodeLimit)},
-		{"", "Pod Limit (←/→ adjust)", fmt.Sprintf("%d", state.pendingPodLimit)},
+		{"[Limits](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Node Limit (←/→ adjust)", "", fmt.Sprintf("%d", state.pendingNodeLimit)},
+		{"", "Pod Limit (←/→ adjust)", "", fmt.Sprintf("%d", state.pendingPodLimit)},
 		{},
-		{"[Filters](fg:cyan,mod:bold)", "", ""},
-		{"", "Node Group Filter", filterValue(state.pendingFilterNodeGroup)},
-		{"", "Capacity Type Filter", filterValue(state.pendingFilterCapacity)},
+		{"[Filters](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Node Group Filter", "", filterValue(state.pendingFilterNodeGroup)},
+		{"", "Capacity Type Filter", "", filterValue(state.pendingFilterCapacity)},
 	}
 	return rows
 }
@@ -2364,18 +2412,18 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 	if totalRows > visibleRows {
 		scrollInfo = fmt.Sprintf(" (%d/%d)", state.modalSelectedRow+1, totalRows)
 	}
-	table.Title = fmt.Sprintf(" ⚙️  Settings%s - ↑↓ Navigate | Space Select | ←→ Adjust | S Save | Esc Cancel ", scrollInfo)
+	table.Title = fmt.Sprintf(" ⚙️  Settings%s - ↑↓ Navigate | Space Select | ←→ Adjust | s Save | Esc Cancel ", scrollInfo)
 	table.TitleStyle = ui.NewStyle(ui.ColorCyan, ui.ColorBlack, ui.ModifierBold)
 
 	// Center the modal
-	modalWidth := 80
+	modalWidth := 85
 	modalHeight := visibleRows + 2 // +2 for borders
 	modalX := (termWidth - modalWidth) / 2
 	modalY := (termHeight - modalHeight) / 2
 	table.SetRect(modalX, modalY, modalX+modalWidth, modalY+modalHeight)
 
 	// Column widths
-	table.ColumnWidths = []int{20, 35, 15}
+	table.ColumnWidths = []int{20, 30, 8, 12}
 
 	// Style header row
 	table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
