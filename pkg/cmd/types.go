@@ -37,6 +37,10 @@ type NodeStats struct {
 	ProviderID              string              `json:",omitempty"`
 	Region                  string              `json:",omitempty"`
 	InstanceType            string              `json:",omitempty"`
+	NodeGroup               string              `json:",omitempty"` // AWS EKS node group
+	NodePool                string              `json:",omitempty"` // GCP GKE node pool
+	FargateProfile          string              `json:",omitempty"` // AWS Fargate profile
+	CapacityType            string              `json:",omitempty"` // ON_DEMAND, SPOT, etc.
 	NodeInfo                v1.NodeSystemInfo   `json:",omitempty"`
 	CloudInfo               cloudInfo           `json:",omitempty"`
 	AllocatableCPU          *resource.Quantity  `json:",omitempty"`

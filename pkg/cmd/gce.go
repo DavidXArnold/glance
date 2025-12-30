@@ -24,12 +24,19 @@ import (
 	computepb "cloud.google.com/go/compute/apiv1/computepb"
 )
 
-func getGCENodeInfo(id string) (string, error) {
+// GCENodeMetadata holds GCP-specific node information.
+type GCENodeMetadata struct {
+	InstanceType string
+	NodePool     string // GKE node pool name
+	CapacityType string // STANDARD, SPOT
+}
+
+func getGCENodeInfo(id string) (*GCENodeMetadata, error) {
 	// Parse the GCE provider ID to get project, zone, instance name
 	// Format: project-id/zone/instance-name
 	parts := strings.Split(id, "/")
 	if len(parts) < 3 {
-		return "", fmt.Errorf("invalid GCE provider ID format")
+		return nil, fmt.Errorf("invalid GCE provider ID format")
 	}
 
 	projectID := parts[0]
@@ -40,7 +47,7 @@ func getGCENodeInfo(id string) (string, error) {
 	c, err := compute.NewInstancesRESTClient(ctx)
 	if err != nil {
 		log.Debugf("failed to create GCE client: %v", err)
-		return "", err
+		return nil, err
 	}
 	defer func() {
 		if err := c.Close(); err != nil {
@@ -57,14 +64,41 @@ func getGCENodeInfo(id string) (string, error) {
 	instance, err := c.Get(ctx, req)
 	if err != nil {
 		log.Debugf("failed to get GCE instance: %v", err)
-		return "", err
+		return nil, err
+	}
+
+	metadata := &GCENodeMetadata{
+		CapacityType: "STANDARD", // Default
 	}
 
 	if instance.MachineType != nil {
 		// Extract just the machine type name from the full URL
 		parts := strings.Split(*instance.MachineType, "/")
-		return parts[len(parts)-1], nil
+		metadata.InstanceType = parts[len(parts)-1]
 	}
 
-	return "", fmt.Errorf("no machine type found")
+	// Extract node pool from metadata/labels
+	if instance.Metadata != nil && instance.Metadata.Items != nil {
+		for _, item := range instance.Metadata.Items {
+			if item.Key != nil && *item.Key == "gke-nodepool" && item.Value != nil {
+				metadata.NodePool = *item.Value
+			}
+		}
+	}
+
+	// Check labels for node pool (alternative location)
+	if metadata.NodePool == "" && instance.Labels != nil {
+		if poolName, ok := instance.Labels["gke-nodepool"]; ok {
+			metadata.NodePool = poolName
+		}
+	}
+
+	// Check for spot instances
+	if instance.Scheduling != nil && instance.Scheduling.ProvisioningModel != nil {
+		if *instance.Scheduling.ProvisioningModel == "SPOT" {
+			metadata.CapacityType = "SPOT"
+		}
+	}
+
+	return metadata, nil
 }

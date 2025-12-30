@@ -110,7 +110,7 @@ func renderPretty(nm *NodeMap, c *Totals) {
 	readyNodes := make([]string, 0)
 	notReadyNodes := make([]string, 0)
 	for name, node := range *nm {
-		if node.Status == "Ready" {
+		if node.Status == nodeStatusReady {
 			readyNodes = append(readyNodes, name)
 		} else {
 			notReadyNodes = append(notReadyNodes, name)

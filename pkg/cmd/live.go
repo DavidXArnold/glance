@@ -105,8 +105,11 @@ type ResourceMetrics struct {
 
 // CloudCacheEntry holds cached cloud provider information with TTL.
 type CloudCacheEntry struct {
-	InstanceType string
-	Timestamp    time.Time
+	InstanceType   string
+	NodeGroup      string // EKS node group or GKE node pool
+	FargateProfile string // AWS Fargate profile
+	CapacityType   string // ON_DEMAND, SPOT, FARGATE
+	Timestamp      time.Time
 }
 
 // CloudCache holds the in-memory cloud info cache with TTL.
@@ -130,27 +133,43 @@ func NewCloudCache(ttl time.Duration, useDisk bool) *CloudCache {
 	return c
 }
 
+// CloudMetadata holds cloud provider metadata for a node.
+type CloudMetadata struct {
+	InstanceType   string
+	NodeGroup      string
+	FargateProfile string
+	CapacityType   string
+}
+
 // Get retrieves a cached cloud info entry if it exists and is not expired.
-func (c *CloudCache) Get(providerID string) (string, bool) {
+func (c *CloudCache) Get(providerID string) (*CloudMetadata, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	entry, ok := c.cache[providerID]
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	if time.Since(entry.Timestamp) > c.ttl {
-		return "", false
+		return nil, false
 	}
-	return entry.InstanceType, true
+	return &CloudMetadata{
+		InstanceType:   entry.InstanceType,
+		NodeGroup:      entry.NodeGroup,
+		FargateProfile: entry.FargateProfile,
+		CapacityType:   entry.CapacityType,
+	}, true
 }
 
 // Set stores a cloud info entry in the cache.
-func (c *CloudCache) Set(providerID, instanceType string) {
+func (c *CloudCache) Set(providerID string, metadata *CloudMetadata) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cache[providerID] = &CloudCacheEntry{
-		InstanceType: instanceType,
-		Timestamp:    time.Now(),
+		InstanceType:   metadata.InstanceType,
+		NodeGroup:      metadata.NodeGroup,
+		FargateProfile: metadata.FargateProfile,
+		CapacityType:   metadata.CapacityType,
+		Timestamp:      time.Now(),
 	}
 	if c.useDisk {
 		// Save to disk in background
@@ -243,10 +262,13 @@ type LiveState struct {
 	showBars               bool
 	showPercentages        bool
 	compactMode            bool
-	showRawResources       bool // Toggle between ratio format and raw resource values
-	showCloudInfo          bool // Toggle cloud provider information display
-	showNodeVersion        bool // Toggle node version display
-	showNodeAge            bool // Toggle node age display
+	showRawResources       bool   // Toggle between ratio format and raw resource values
+	showCloudInfo          bool   // Toggle cloud provider information display
+	showNodeVersion        bool   // Toggle node version display
+	showNodeAge            bool   // Toggle node age display
+	showNodeGroup          bool   // Toggle node group/pool display
+	filterNodeGroup        string // Filter by node group/pool (empty = all)
+	filterCapacityType     string // Filter by capacity type: on-demand, spot, fargate (empty = all)
 	// Scaling options
 	nodeLimit     int
 	podLimit      int
@@ -365,6 +387,9 @@ func runLive(
 		showCloudInfo:          viper.GetBool("show-cloud-provider"),
 		showNodeVersion:        viper.GetBool("show-node-version"),
 		showNodeAge:            viper.GetBool("show-node-age"),
+		showNodeGroup:          viper.GetBool("show-node-group"),
+		filterNodeGroup:        viper.GetString("filter-node-group"),
+		filterCapacityType:     viper.GetString("filter-capacity-type"),
 	}
 
 	// Check cluster size and warn for large clusters
@@ -460,6 +485,9 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		saveColumnPreferences(state)
 	case "a":
 		state.showNodeAge = !state.showNodeAge
+		saveColumnPreferences(state)
+	case "g":
+		state.showNodeGroup = !state.showNodeGroup
 		saveColumnPreferences(state)
 	case "+", "=":
 		// Increase limits
@@ -566,6 +594,7 @@ func saveColumnPreferences(state *LiveState) {
 	viper.Set("show-cloud-provider", state.showCloudInfo)
 	viper.Set("show-node-version", state.showNodeVersion)
 	viper.Set("show-node-age", state.showNodeAge)
+	viper.Set("show-node-group", state.showNodeGroup)
 
 	// Save to config file if configured
 	if viper.ConfigFileUsed() != "" {
@@ -1286,16 +1315,19 @@ func fetchPodData(
 
 // nodeRowData holds data for a single node row for parallel processing.
 type nodeRowData struct {
-	row          []string
-	metrics      ResourceMetrics
-	isReady      bool
-	cpuUsage     float64
-	memUsage     float64
-	creationTime time.Time
-	nodeVersion  string
-	providerID   string
-	region       string
-	instanceType string
+	row            []string
+	metrics        ResourceMetrics
+	isReady        bool
+	cpuUsage       float64
+	memUsage       float64
+	creationTime   time.Time
+	nodeVersion    string
+	providerID     string
+	region         string
+	instanceType   string
+	nodeGroup      string
+	fargateProfile string
+	capacityType   string
 }
 
 // buildNodeHeader constructs the table header based on toggle states.
@@ -1308,6 +1340,9 @@ func buildNodeHeader(state *LiveState) []string {
 	if state.showNodeAge {
 		header = append(header, "AGE")
 	}
+	if state.showNodeGroup {
+		header = append(header, "NODE GROUP/POOL")
+	}
 
 	header = append(header,
 		"CPU ALLOCATED/CAPACITY",
@@ -1318,7 +1353,7 @@ func buildNodeHeader(state *LiveState) []string {
 	)
 
 	if state.showCloudInfo {
-		header = append(header, "PROVIDER", "REGION", "INSTANCE TYPE")
+		header = append(header, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
 	}
 
 	return header
@@ -1428,6 +1463,13 @@ func processNodeRow(
 		row = append(row, glanceutil.FormatAge(node.CreationTimestamp.Time))
 	}
 
+	// Extract node group/pool from labels
+	nodeGroup := extractNodeGroupFromLabels(node.Labels)
+
+	if state.showNodeGroup {
+		row = append(row, nodeGroup)
+	}
+
 	// Add resource columns
 	row = append(row,
 		formatResourceRatio(cpuAlloc, cpuCap, false, state.showRawResources),
@@ -1457,6 +1499,7 @@ func processNodeRow(
 		creationTime: node.CreationTimestamp.Time,
 		nodeVersion:  node.Status.NodeInfo.KubeletVersion,
 		providerID:   node.Spec.ProviderID,
+		nodeGroup:    nodeGroup,
 	}
 
 	// Get region from labels
@@ -1464,7 +1507,63 @@ func processNodeRow(
 		rowData.region = region
 	}
 
+	// Extract capacity type from labels
+	capacityType := extractCapacityTypeFromLabels(node.Labels)
+	rowData.capacityType = capacityType
+
+	// Extract Fargate profile if present
+	if profile, ok := node.Labels["eks.amazonaws.com/fargate-profile"]; ok {
+		rowData.fargateProfile = profile
+		rowData.capacityType = "FARGATE"
+	}
+
 	return row, metrics, rowData
+}
+
+// extractNodeGroupFromLabels extracts node group/pool name from node labels.
+func extractNodeGroupFromLabels(labels map[string]string) string {
+	// EKS node group
+	if ng, ok := labels["eks.amazonaws.com/nodegroup"]; ok {
+		return ng
+	}
+	// GKE node pool
+	if np, ok := labels["cloud.google.com/gke-nodepool"]; ok {
+		return np
+	}
+	// AKS node pool
+	if np, ok := labels["agentpool"]; ok {
+		return np
+	}
+	// Kops instance group
+	if ig, ok := labels["kops.k8s.io/instancegroup"]; ok {
+		return ig
+	}
+	return ""
+}
+
+// extractCapacityTypeFromLabels extracts capacity type from node labels.
+func extractCapacityTypeFromLabels(labels map[string]string) string {
+	// EKS capacity type
+	if ct, ok := labels["eks.amazonaws.com/capacityType"]; ok {
+		return strings.ToUpper(ct)
+	}
+	// karpenter capacity type
+	if ct, ok := labels["karpenter.sh/capacity-type"]; ok {
+		return strings.ToUpper(ct)
+	}
+	// GKE spot
+	if spot, ok := labels["cloud.google.com/gke-spot"]; ok {
+		if spot == "true" {
+			return capacityTypeSpot
+		}
+	}
+	// GKE preemptible (legacy)
+	if pre, ok := labels["cloud.google.com/gke-preemptible"]; ok {
+		if pre == "true" {
+			return capacityTypeSpot
+		}
+	}
+	return "ON_DEMAND"
 }
 
 // fetchCloudInfoForNodes fetches cloud provider info for all nodes with caching.
@@ -1489,9 +1588,19 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 		}
 
 		// Check cache first
-		if cachedType, ok := state.cloudCache.Get(nodeData[i].providerID); ok {
+		if cachedMetadata, ok := state.cloudCache.Get(nodeData[i].providerID); ok {
 			mu.Lock()
-			nodeData[i].instanceType = cachedType
+			nodeData[i].instanceType = cachedMetadata.InstanceType
+			// Override with cached cloud info if available (takes precedence over labels)
+			if cachedMetadata.NodeGroup != "" {
+				nodeData[i].nodeGroup = cachedMetadata.NodeGroup
+			}
+			if cachedMetadata.FargateProfile != "" {
+				nodeData[i].fargateProfile = cachedMetadata.FargateProfile
+			}
+			if cachedMetadata.CapacityType != "" {
+				nodeData[i].capacityType = cachedMetadata.CapacityType
+			}
 			mu.Unlock()
 			continue
 		}
@@ -1519,33 +1628,63 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 		cloudWg.Add(1)
 		go func(idx int, provider string, instanceID string, providerID string) {
 			defer cloudWg.Done()
-			var instanceType string
+			var metadata *CloudMetadata
 			var err error
 			switch provider {
 			case "aws":
-				instanceType, err = getAWSNodeInfo(instanceID)
+				awsMetadata, awsErr := getAWSNodeInfo(instanceID)
+				if awsErr == nil && awsMetadata != nil {
+					metadata = &CloudMetadata{
+						InstanceType:   awsMetadata.InstanceType,
+						NodeGroup:      awsMetadata.NodeGroup,
+						FargateProfile: awsMetadata.FargateProfile,
+						CapacityType:   awsMetadata.CapacityType,
+					}
+				}
+				err = awsErr
 			case "gce":
-				instanceType, err = getGCENodeInfo(instanceID)
+				gceMetadata, gceErr := getGCENodeInfo(instanceID)
+				if gceErr == nil && gceMetadata != nil {
+					metadata = &CloudMetadata{
+						InstanceType: gceMetadata.InstanceType,
+						NodeGroup:    gceMetadata.NodePool,
+						CapacityType: gceMetadata.CapacityType,
+					}
+				}
+				err = gceErr
 			}
-			if err == nil && instanceType != "" {
+			if err == nil && metadata != nil {
 				// Cache the result
-				state.cloudCache.Set(providerID, instanceType)
+				state.cloudCache.Set(providerID, metadata)
 				mu.Lock()
-				nodeData[idx].instanceType = instanceType
+				nodeData[idx].instanceType = metadata.InstanceType
+				// Override with cloud API info if available (more accurate than labels)
+				if metadata.NodeGroup != "" {
+					nodeData[idx].nodeGroup = metadata.NodeGroup
+				}
+				if metadata.FargateProfile != "" {
+					nodeData[idx].fargateProfile = metadata.FargateProfile
+				}
+				if metadata.CapacityType != "" {
+					nodeData[idx].capacityType = metadata.CapacityType
+				}
 				mu.Unlock()
 			}
 		}(i, cp, instanceID, nodeData[i].providerID)
 	}
 	cloudWg.Wait()
 
-	// Add cloud columns to rows
-	for i := range nodeData {
-		provider := ""
-		if nodeData[i].providerID != "" {
-			cp, _ := glanceutil.ParseProviderID(nodeData[i].providerID)
-			provider = strings.ToUpper(cp)
+	// Add cloud columns to rows if cloud info is enabled
+	if state.showCloudInfo {
+		for i := range nodeData {
+			provider := ""
+			if nodeData[i].providerID != "" {
+				cp, _ := glanceutil.ParseProviderID(nodeData[i].providerID)
+				provider = strings.ToUpper(cp)
+			}
+			nodeData[i].row = append(nodeData[i].row,
+				provider, nodeData[i].region, nodeData[i].instanceType, nodeData[i].capacityType)
 		}
-		nodeData[i].row = append(nodeData[i].row, provider, nodeData[i].region, nodeData[i].instanceType)
 	}
 }
 
@@ -1623,8 +1762,14 @@ func fetchNodeData(
 	// Fetch cloud info asynchronously if enabled
 	fetchCloudInfoForNodes(nodeData, state)
 
+	// Apply filters
+	nodeData = filterNodeData(nodeData, state)
+
 	// Sort based on sort mode
 	sortNodeData(nodeData, state.sortMode)
+
+	// Update total after filtering
+	state.totalNodes = len(nodeData)
 
 	// Apply node limit
 	limit := len(nodeData)
@@ -1641,6 +1786,37 @@ func fetchNodeData(
 	}
 
 	return header, rows, metrics, nil
+}
+
+// filterNodeData filters node data based on state filters.
+func filterNodeData(data []nodeRowData, state *LiveState) []nodeRowData {
+	if state.filterNodeGroup == "" && state.filterCapacityType == "" {
+		return data // No filtering needed
+	}
+
+	filtered := make([]nodeRowData, 0, len(data))
+	for _, row := range data {
+		// Filter by node group/pool if specified
+		if state.filterNodeGroup != "" {
+			if row.nodeGroup == "" || !strings.Contains(strings.ToLower(row.nodeGroup), strings.ToLower(state.filterNodeGroup)) {
+				lowerFilter := strings.ToLower(state.filterNodeGroup)
+				if row.fargateProfile == "" ||
+					!strings.Contains(strings.ToLower(row.fargateProfile), lowerFilter) {
+					continue
+				}
+			}
+		}
+
+		// Filter by capacity type if specified
+		if state.filterCapacityType != "" {
+			if !strings.EqualFold(row.capacityType, state.filterCapacityType) {
+				continue
+			}
+		}
+
+		filtered = append(filtered, row)
+	}
+	return filtered
 }
 
 // sortNodeData sorts node data based on sort mode
@@ -1758,7 +1934,7 @@ func fetchDeploymentData(
 func getHelpText(mode ViewMode) string {
 	base := "[n]NS [p]Pods [o]Nodes [d]Deploy | [b]Bars [%]Pct [r]Raw Data [s]Sort [c]Compact | [q]Quit"
 	if mode == ViewNodes {
-		return base + " | [i]Cloud [v]Version [a]Age [+/-]Limits [l]Presets"
+		return base + " | [i]Cloud [v]Version [a]Age [g]NodeGroup [+/-]Limits [l]Presets"
 	}
 	if mode == ViewPods || mode == ViewDeployments {
 		return base + " | [←→]NS [+/-]Limits [l]Presets"

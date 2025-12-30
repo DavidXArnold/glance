@@ -50,6 +50,11 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
+const (
+	providerAWS = "aws"
+	providerGCE = "gce"
+)
+
 var (
 	cfgFile               string
 	KubernetesConfigFlags *genericclioptions.ConfigFlags
@@ -82,6 +87,9 @@ func initConfig() {
 	viper.SetDefault("cloud-cache-disk", false)
 	viper.SetDefault("show-node-version", false)
 	viper.SetDefault("show-node-age", false)
+	viper.SetDefault("show-node-group", false)
+	viper.SetDefault("filter-node-group", "")
+	viper.SetDefault("filter-capacity-type", "")
 
 	// Configure logging after config is loaded
 	configureLogging()
@@ -612,15 +620,20 @@ func getCloudInfo(ctx context.Context, n *v1.Node, ns *NodeStats, wg *sync.WaitG
 		go func() {
 			defer wg.Done()
 			switch cp {
-			case "aws":
-				instanceType, err := getAWSNodeInfo(id[1])
-				if err == nil {
-					ns.InstanceType = instanceType
+			case providerAWS:
+				awsInfo, err := getAWSNodeInfo(id[1])
+				if err == nil && awsInfo != nil {
+					ns.InstanceType = awsInfo.InstanceType
+					ns.NodeGroup = awsInfo.NodeGroup
+					ns.FargateProfile = awsInfo.FargateProfile
+					ns.CapacityType = awsInfo.CapacityType
 				}
-			case "gce":
-				instanceType, err := getGCENodeInfo(id[1])
-				if err == nil {
-					ns.InstanceType = instanceType
+			case providerGCE:
+				gceInfo, err := getGCENodeInfo(id[1])
+				if err == nil && gceInfo != nil {
+					ns.InstanceType = gceInfo.InstanceType
+					ns.NodePool = gceInfo.NodePool
+					ns.CapacityType = gceInfo.CapacityType
 				}
 			case "azure":
 				// Azure support not yet implemented
