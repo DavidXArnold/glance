@@ -454,7 +454,7 @@ func runLive(
 	state.menuBar = widgets.NewParagraph()
 
 	state.menuBar.Border = false
-	state.menuBar.Text = " Toggle View: [b]Progress [%]Percent [c]Compact [r]Raw [i]Cloud [v]Version [a]Age [g]Group | " +
+	state.menuBar.Text = " Toggle View: [b]Progress [%]Percent [c]Compact [r]Raw [w]Cloud [v]Version [a]Age [g]Group | " +
 		"Sort: [1]Status [2]Name [3]CPU [4]Memory"
 	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
 
@@ -541,7 +541,7 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		state.showRawResources = !state.showRawResources
 		viper.Set("show-raw-resources", state.showRawResources)
 		_ = viper.WriteConfig()
-	case "i":
+	case "w":
 		state.showCloudInfo = !state.showCloudInfo
 		viper.Set("show-cloud-provider", state.showCloudInfo)
 		_ = viper.WriteConfig()
