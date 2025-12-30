@@ -7,30 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-29
+
 ### Added
-- Cloud info caching with TTL (default: 5 minutes) for improved performance
+- Cloud info caching with TTL (default: 5 minutes) for improved performance in live view
 - Disk-based cache persistence option (`cloud-cache-disk: true` in config)
-- Column visibility persistence: toggle states saved to config file
+- Column visibility persistence: toggle states automatically saved to config file
 - Config options: `cloud-cache-ttl`, `cloud-cache-disk`, `show-node-version`, `show-node-age`
 - Cache stored in `~/.glance/cloud-cache.json` when disk persistence enabled
-- New live view columns: version (`v`), age (`a`), and cloud info (`i`) toggles
-- Dynamic limit controls: `+/-` keys to adjust node/pod limits, `l` to cycle presets (20/50/100/500/1000)
-- Limit display in status bar and summary bar showing "X/Y nodes" or "X/Y pods"
-- Async cloud info retrieval for non-blocking performance
-- Progress bar improvements: only shown on resource columns, not metadata columns
-
-### Fixed
-- Panic when toggling cloud info with invalid provider IDs (index out of range)
-- Progress bars incorrectly appearing on version, age, and cloud provider columns
-- Cloud info now properly validates provider ID format before parsing
-- Lint error in test: addProgressBars now requires baseColCount parameter
+- New live view column toggles: version (`v` key), age (`a` key), and cloud info (`i` key)
+- Dynamic limit controls: `+/-` keys to adjust node/pod limits by 10, `l` key to cycle presets (20/50/100/500/1000)
+- Limit display in status bar showing "X/Y nodes" or "X/Y pods" for better visibility
+- Async cloud info retrieval for non-blocking performance in live mode
 
 ### Changed
+- **BREAKING: Default live view changed from Pods to Nodes** for better initial cluster overview
 - Default `maxConcurrent` increased from 50 to 100 for better performance on large clusters
-- Cloud provider instance type lookups now cached with configurable TTL
-- Column visibility changes automatically persisted to config file
-- Refactored `fetchNodeData` function for reduced cyclomatic complexity (extracted helper functions)
+- Cloud provider instance type lookups now cached with configurable TTL to reduce API calls
+- Column visibility changes automatically persisted to config file (requires `~/.glance` to exist)
+- Progress bars now only appear on resource columns, not metadata columns (version, age, cloud info)
+- Refactored `fetchNodeData` function for reduced cyclomatic complexity with extracted helper functions
 - Improved code quality: replaced if-else chains with tagged switch statements for better performance
+
+### Fixed
+- Panic when toggling cloud info with invalid provider IDs (added index bounds checking)
+- Progress bars incorrectly appearing on version, age, and cloud provider columns
+- Cloud info now properly validates provider ID format before parsing
+- Whitespace lint error in test file (removed unnecessary trailing newline)
 
 ## [0.1.20] - 2025-12-29
 
