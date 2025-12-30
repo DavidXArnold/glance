@@ -185,6 +185,12 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions).\n"+
 			"Enabled by default if cloud detected.")
 
+	// Add --raw and --exact flags (aliases)
+	var showRaw bool
+	var exactValues bool
+	cmd.PersistentFlags().BoolVar(&showRaw, "raw", false, "Show raw Kubernetes resource values (e.g., 1500m, 2048Mi)")
+	cmd.PersistentFlags().BoolVar(&exactValues, "exact", false, "Alias for --raw")
+
 	cobra.OnInitialize(initConfig)
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -193,6 +199,7 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
 	_ = viper.BindPFlag("show-cloud-provider", cmd.PersistentFlags().Lookup("show-cloud-provider"))
 	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("show-cloud-provider")) // Backwards compatibility alias
+	_ = viper.BindPFlag("show-raw", cmd.PersistentFlags().Lookup("raw"))
 	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
 	_ = viper.BindPFlags(cmd.Flags())
 }
@@ -230,6 +237,11 @@ func NewGlanceCmd() *cobra.Command {
 			return glanceutil.SetupLogger()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Make --exact and --raw aliases
+			showRaw := viper.GetBool("show-raw") || viper.GetBool("exact")
+			viper.Set("show-raw", showRaw)
+			viper.Set("exact", showRaw)
+
 			// create the clientset
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
 			if err != nil {

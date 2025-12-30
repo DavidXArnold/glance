@@ -454,8 +454,9 @@ func runLive(
 	state.menuBar = widgets.NewParagraph()
 
 	state.menuBar.Border = false
-	state.menuBar.Text = " Toggle View: [b]Progress [%]Percent [c]Compact [r]Raw [w]Cloud [v]Version [a]Age [g]Group | " +
-		"Sort: [1]Status [2]Name [3]CPU [4]Memory"
+	state.menuBar.Text = " Views: [o]Nodes [n]Namespaces [p]Pods [d]Deployments | " +
+		"Toggle: [b]Bars [%]Percent [r]Raw [w]Cloud [v]Version [a]Age [g]Group\n" +
+		" Sort: [1]Status [2]Name [3]CPU [4]Memory | [?]Settings [q]Quit"
 	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
 
 	// Initial render
@@ -685,8 +686,11 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 			if state.showNodeAge {
 				baseColCount++
 			}
+			if state.showNodeGroup {
+				baseColCount++
+			}
 		}
-		data = addProgressBars(data, metrics, state.showPercentages, baseColCount)
+		data = addProgressBars(data, metrics, state.showPercentages, baseColCount, state.mode)
 	}
 
 	// Calculate summary stats
@@ -694,7 +698,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 
 	// Calculate table height based on compact mode (leave room for summary and shortcuts)
 	summaryHeight := 3
-	shortcutsHeight := 1
+	shortcutsHeight := 2                                            // Changed from 1 to 2 for two-line menu
 	tableHeight := termHeight - 4 - summaryHeight - shortcutsHeight // 4 = status bar (1) + borders (3)
 	if state.compactMode {
 		tableHeight = termHeight - 4 - shortcutsHeight
@@ -738,12 +742,12 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 
 	// Update status bar with limit information
 	modeStr := getModeString(state.mode)
-	limitInfo := ""
+	viewingInfo := ""
 	switch state.mode {
 	case ViewNodes:
-		limitInfo = fmt.Sprintf(" | Limits: %d/%d nodes", min(state.nodeLimit, state.totalNodes), state.totalNodes)
+		viewingInfo = fmt.Sprintf(" | Viewing Nodes: %d/%d", min(state.nodeLimit, state.totalNodes), state.totalNodes)
 	case ViewPods:
-		limitInfo = fmt.Sprintf(" | Limits: %d/%d pods", min(state.podLimit, state.totalPods), state.totalPods)
+		viewingInfo = fmt.Sprintf(" | Viewing Pods: %d/%d", min(state.podLimit, state.totalPods), state.totalPods)
 	}
 
 	// Add filter info if active
@@ -771,12 +775,12 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s%s%s%s%s | [?]Settings [q]Quit",
 		modeStr,
 		state.lastUpdate.Format("15:04:05"),
-		limitInfo,
+		viewingInfo,
 		filterInfo,
 		sortInfo,
 		dirtyIndicator)
 	state.statusBar.Border = false
-	state.statusBar.SetRect(0, tableHeight+summaryHeight+1, termWidth, tableHeight+summaryHeight+2)
+	state.statusBar.SetRect(0, tableHeight+summaryHeight+2, termWidth, tableHeight+summaryHeight+3)
 
 	// Position and render shortcuts bar
 	state.menuBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+1)
@@ -905,12 +909,16 @@ func renderSummaryBar(
 		namespaceInfo = fmt.Sprintf(" │ [Namespace: [←→]](fg:cyan,mod:bold) [%s](fg:white,mod:bold)", nsDisplay)
 	}
 
-	// Add limit display for nodes and pods
-	limitInfo := ""
+	// Add viewing display for nodes and pods
+	viewingInfo := ""
 	if mode == ViewNodes && totalNodes > 0 {
-		limitInfo = fmt.Sprintf(" │ [Limit:](fg:cyan,mod:bold) [%d/%d](fg:white)", min(nodeLimit, totalNodes), totalNodes)
+		viewingInfo = fmt.Sprintf(
+			" │ [Viewing Nodes:](fg:cyan,mod:bold) [%d/%d](fg:white)",
+			min(nodeLimit, totalNodes), totalNodes)
 	} else if mode == ViewPods && totalPods > 0 {
-		limitInfo = fmt.Sprintf(" │ [Limit:](fg:cyan,mod:bold) [%d/%d](fg:white)", min(podLimit, totalPods), totalPods)
+		viewingInfo = fmt.Sprintf(
+			" │ [Viewing Pods:](fg:cyan,mod:bold) [%d/%d](fg:white)",
+			min(podLimit, totalPods), totalPods)
 	}
 
 	summary.Text = fmt.Sprintf(
@@ -919,7 +927,7 @@ func renderSummaryBar(
 		cpuBar, stats.AvgCPUUsage,
 		memBar, stats.AvgMemUsage,
 		namespaceInfo,
-		limitInfo,
+		viewingInfo,
 	)
 
 	summary.SetRect(0, 0, width, 3)
@@ -2119,7 +2127,13 @@ func formatMilliCPU(q *resource.Quantity) string {
 	if q == nil || q.IsZero() {
 		return "0"
 	}
-	return fmt.Sprintf("%.1f", float64(q.MilliValue())/1000.0)
+	cores := float64(q.MilliValue()) / 1000.0
+	// For values >= 1 core, show as cores
+	if cores >= 1.0 {
+		return fmt.Sprintf("%.1f", cores)
+	}
+	// For values < 1 core, show in millicores with 'm' suffix
+	return fmt.Sprintf("%dm", q.MilliValue())
 }
 
 func formatBytes(q *resource.Quantity) string {
@@ -2157,7 +2171,13 @@ func multiplyQuantity(q *resource.Quantity, multiplier int) *resource.Quantity {
 }
 
 // addProgressBars adds visual progress bars under resource values
-func addProgressBars(data [][]string, metrics []ResourceMetrics, showPercentages bool, baseColCount int) [][]string {
+func addProgressBars(
+	data [][]string,
+	metrics []ResourceMetrics,
+	showPercentages bool,
+	baseColCount int,
+	viewMode ViewMode,
+) [][]string {
 	if len(data) == 0 || len(metrics) == 0 {
 		return data
 	}
@@ -2182,19 +2202,30 @@ func addProgressBars(data [][]string, metrics []ResourceMetrics, showPercentages
 		// baseColCount tells us where resource columns start
 		// For namespace view: NAMESPACE (1 col) -> resources start at col 1
 		// For node view: NODE, STATUS (2 cols) + optional cols -> resources start after baseColCount
-		resourceStartCol := baseColCount
+		// For deployment view: only add bars to CPU and MEM columns (not replica columns)
+		if viewMode == ViewDeployments {
+			// Deployments: only bars on CPU and MEM columns (indices 2 and 3)
+			// DEPLOYMENT, STATUS, CPU REQ/LIM, MEM REQ/LIM, REPLICAS, READY, AVAILABLE
+			if len(row) >= 4 {
+				bars[2] = makeProgressBar(m.CPURequest, m.CPULimit, 10, showPercentages)
+				bars[3] = makeProgressBar(m.MemRequest, m.MemLimit, 10, showPercentages)
+			}
+		} else {
+			// Other views: bars on all resource columns
+			resourceStartCol := baseColCount
 
-		// Only add progress bars to resource columns (CPU and Memory)
-		// We expect at least 4 resource columns after baseColCount
-		if len(row) >= resourceStartCol+4 {
-			// CPU Allocated bar
-			bars[resourceStartCol] = makeProgressBar(m.CPURequest, m.CPUCapacity, 10, showPercentages)
-			// CPU Usage bar
-			bars[resourceStartCol+1] = makeProgressBar(m.CPUUsage, m.CPUCapacity, 10, showPercentages)
-			// Memory Allocated bar
-			bars[resourceStartCol+2] = makeProgressBar(m.MemRequest, m.MemCapacity, 10, showPercentages)
-			// Memory Usage bar
-			bars[resourceStartCol+3] = makeProgressBar(m.MemUsage, m.MemCapacity, 10, showPercentages)
+			// Only add progress bars to resource columns (CPU and Memory)
+			// We expect at least 4 resource columns after baseColCount
+			if len(row) >= resourceStartCol+4 {
+				// CPU Allocated bar
+				bars[resourceStartCol] = makeProgressBar(m.CPURequest, m.CPUCapacity, 10, showPercentages)
+				// CPU Usage bar
+				bars[resourceStartCol+1] = makeProgressBar(m.CPUUsage, m.CPUCapacity, 10, showPercentages)
+				// Memory Allocated bar
+				bars[resourceStartCol+2] = makeProgressBar(m.MemRequest, m.MemCapacity, 10, showPercentages)
+				// Memory Usage bar
+				bars[resourceStartCol+3] = makeProgressBar(m.MemUsage, m.MemCapacity, 10, showPercentages)
+			}
 		}
 
 		result = append(result, bars)

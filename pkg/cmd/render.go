@@ -49,24 +49,51 @@ func formatQuantity(q *resource.Quantity) string {
 		return ""
 	}
 
-	if viper.GetBool("exact") {
+	if viper.GetBool("exact") || viper.GetBool("show-raw") {
 		// Exact value mode - show the raw value
 		return q.String()
 	}
 
-	// Human-readable mode (default)
-	return q.String()
+	// Human-readable mode - determine if CPU or Memory based on scale
+	// CPU values are typically in milli range, memory in bytes
+	if q.MilliValue() < 100000 && q.Value() < 1000000 {
+		// Likely CPU (small millivalue)
+		return formatMilliCPU(q)
+	}
+	// Likely Memory (large byte value)
+	return formatBytes(q)
 }
 
 // formatQuantityValue returns a human-readable or exact representation of a quantity value.
 func formatQuantityValue(q resource.Quantity) string {
-	if viper.GetBool("exact") {
+	if viper.GetBool("exact") || viper.GetBool("show-raw") {
 		// Exact value mode - show the raw value
 		return q.String()
 	}
 
-	// Human-readable mode (default)
-	return q.String()
+	// Human-readable mode
+	if q.MilliValue() < 100000 && q.Value() < 1000000 {
+		// Likely CPU
+		return formatMilliCPU(&q)
+	}
+	// Likely Memory
+	return formatBytes(&q)
+}
+
+// formatResourceRatioFromStrings formats resource strings as ratio (used / total).
+// Converts string quantities to resource.Quantity then formats as ratio.
+// nolint:unused // Reserved for future static view ratio formatting
+func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory bool, showRaw bool) string {
+	used, err := resource.ParseQuantity(usedStr)
+	if err != nil {
+		return fmt.Sprintf("%s / %s", usedStr, totalStr)
+	}
+	total, err := resource.ParseQuantity(totalStr)
+	if err != nil {
+		return fmt.Sprintf("%s / %s", usedStr, totalStr)
+	}
+	// Call the function from live.go
+	return formatResourceRatio(&used, &total, isMemory, showRaw)
 }
 
 func render(nm *NodeMap, c *Totals) {
