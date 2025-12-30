@@ -329,9 +329,9 @@ func TestSettingsModal(t *testing.T) {
 		t.Errorf("buildSettingsRows() returned empty slice")
 	}
 
-	// First row should be header
-	if len(rows[0]) < 4 {
-		t.Errorf("buildSettingsRows() header should have 4 columns")
+	// First row should be header with 3 columns (Category, Setting, Value)
+	if len(rows[0]) < 3 {
+		t.Errorf("buildSettingsRows() header should have 3 columns")
 	}
 }
 

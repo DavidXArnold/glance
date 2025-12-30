@@ -2275,33 +2275,33 @@ func updateModalScroll(state *LiveState, totalRows, visibleRows int) {
 // buildSettingsRows creates the table rows for the settings modal.
 func buildSettingsRows(state *LiveState) [][]string {
 	rows := [][]string{
-		{"Category", "Setting", "Key", "Value"},
+		{"Category", "Setting", "Value"},
 		{},
-		{"[Display Options](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Progress Bars", "[b]", boolToCheckbox(state.pendingShowBars)},
-		{"", "Percentages", "[%]", boolToCheckbox(state.pendingShowPercentages)},
-		{"", "Compact Mode", "[c]", boolToCheckbox(state.pendingCompactMode)},
-		{"", "Raw Resources", "[r]", boolToCheckbox(state.pendingShowRawResources)},
+		{"[Display Options](fg:cyan,mod:bold)", "", ""},
+		{"", "Progress Bars", boolToCheckbox(state.pendingShowBars)},
+		{"", "Percentages", boolToCheckbox(state.pendingShowPercentages)},
+		{"", "Compact Mode", boolToCheckbox(state.pendingCompactMode)},
+		{"", "Raw Resources", boolToCheckbox(state.pendingShowRawResources)},
 		{},
-		{"[Node Columns](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Cloud Provider Info", "[i]", boolToCheckbox(state.pendingShowCloudInfo)},
-		{"", "Node Version", "[v]", boolToCheckbox(state.pendingShowNodeVersion)},
-		{"", "Node Age", "[a]", boolToCheckbox(state.pendingShowNodeAge)},
-		{"", "Node Group/Pool", "[g]", boolToCheckbox(state.pendingShowNodeGroup)},
+		{"[Node Columns](fg:cyan,mod:bold)", "", ""},
+		{"", "Cloud Provider Info", boolToCheckbox(state.pendingShowCloudInfo)},
+		{"", "Node Version", boolToCheckbox(state.pendingShowNodeVersion)},
+		{"", "Node Age", boolToCheckbox(state.pendingShowNodeAge)},
+		{"", "Node Group/Pool", boolToCheckbox(state.pendingShowNodeGroup)},
 		{},
-		{"[Sorting](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Sort by Status", "", sortModeRadio(state.pendingSortMode, SortByStatus)},
-		{"", "Sort by Name", "", sortModeRadio(state.pendingSortMode, SortByName)},
-		{"", "Sort by CPU", "", sortModeRadio(state.pendingSortMode, SortByCPU)},
-		{"", "Sort by Memory", "", sortModeRadio(state.pendingSortMode, SortByMemory)},
+		{"[Sorting](fg:cyan,mod:bold)", "", ""},
+		{"", "Sort by Status", sortModeRadio(state.pendingSortMode, SortByStatus)},
+		{"", "Sort by Name", sortModeRadio(state.pendingSortMode, SortByName)},
+		{"", "Sort by CPU", sortModeRadio(state.pendingSortMode, SortByCPU)},
+		{"", "Sort by Memory", sortModeRadio(state.pendingSortMode, SortByMemory)},
 		{},
-		{"[Limits](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Node Limit", "[←/→]", fmt.Sprintf("%d", state.pendingNodeLimit)},
-		{"", "Pod Limit", "[←/→]", fmt.Sprintf("%d", state.pendingPodLimit)},
+		{"[Limits](fg:cyan,mod:bold)", "", ""},
+		{"", "Node Limit (←/→ adjust)", fmt.Sprintf("%d", state.pendingNodeLimit)},
+		{"", "Pod Limit (←/→ adjust)", fmt.Sprintf("%d", state.pendingPodLimit)},
 		{},
-		{"[Filters](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Node Group Filter", "[Enter]", filterValue(state.pendingFilterNodeGroup)},
-		{"", "Capacity Type Filter", "[Enter]", filterValue(state.pendingFilterCapacity)},
+		{"[Filters](fg:cyan,mod:bold)", "", ""},
+		{"", "Node Group Filter", filterValue(state.pendingFilterNodeGroup)},
+		{"", "Capacity Type Filter", filterValue(state.pendingFilterCapacity)},
 	}
 	return rows
 }
@@ -2359,29 +2359,29 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 	}
 	table.Rows = allRows[state.modalScrollOffset:endRow]
 
-	// Title with scroll position
+	// Title with scroll position and instructions
 	scrollInfo := ""
 	if totalRows > visibleRows {
 		scrollInfo = fmt.Sprintf(" (%d/%d)", state.modalSelectedRow+1, totalRows)
 	}
-	table.Title = fmt.Sprintf(" ⚙️  Settings%s ", scrollInfo)
+	table.Title = fmt.Sprintf(" ⚙️  Settings%s - ↑↓ Navigate | Space Select | ←→ Adjust | S Save | Esc Cancel ", scrollInfo)
 	table.TitleStyle = ui.NewStyle(ui.ColorCyan, ui.ColorBlack, ui.ModifierBold)
 
 	// Center the modal
-	modalWidth := 70
+	modalWidth := 80
 	modalHeight := visibleRows + 2 // +2 for borders
 	modalX := (termWidth - modalWidth) / 2
 	modalY := (termHeight - modalHeight) / 2
 	table.SetRect(modalX, modalY, modalX+modalWidth, modalY+modalHeight)
 
 	// Column widths
-	table.ColumnWidths = []int{20, 25, 10, 15}
+	table.ColumnWidths = []int{20, 35, 15}
 
 	// Style header row
 	table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
 
-	// Highlight selected row (adjust for scroll offset)
-	selectedIdx := state.modalSelectedRow - state.modalScrollOffset + 1
+	// Highlight selected row (adjust for scroll offset only, no +1 for header)
+	selectedIdx := state.modalSelectedRow - state.modalScrollOffset
 	if selectedIdx >= 0 && selectedIdx < len(table.Rows) {
 		// Only highlight non-empty, non-category rows
 		row := allRows[state.modalSelectedRow]
