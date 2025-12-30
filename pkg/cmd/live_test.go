@@ -120,7 +120,7 @@ func TestFormatMilliCPU(t *testing.T) {
 	}{
 		{"nil", nil, "0"},
 		{"zero", resource.NewMilliQuantity(0, resource.DecimalSI), "0"},
-		{"500m", resource.NewMilliQuantity(500, resource.DecimalSI), "0.5"},
+		{"500m", resource.NewMilliQuantity(500, resource.DecimalSI), "500m"},
 		{"1000m", resource.NewMilliQuantity(1000, resource.DecimalSI), "1.0"},
 		{"2500m", resource.NewMilliQuantity(2500, resource.DecimalSI), "2.5"},
 	}
@@ -286,7 +286,7 @@ func TestAddProgressBars(t *testing.T) {
 	}
 
 	// For namespace view, we have 1 base column (NAMESPACE)
-	result := addProgressBars(data, metrics, true, 1)
+	result := addProgressBars(data, metrics, true, 1, ViewNamespaces)
 
 	// Should have double the rows (original + bar rows)
 	if len(result) != len(data)*2 {
