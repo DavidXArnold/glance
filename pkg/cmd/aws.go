@@ -15,6 +15,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -34,8 +35,8 @@ func getAWSNodeInfo(id string) *ec2.DescribeInstancesOutput {
 	result, err := svc.DescribeInstances(context.Background(), input)
 	if err != nil {
 		var ae smithy.APIError
-		if err.(interface{ As(interface{}) bool }).As(&ae) {
-			log.Warnf("error occurred describing instance %s: %v", id, ae.Error())
+		if errors.As(err, &ae) {
+			log.Warnf("error occurred describing instance %s: %v", id, ae.ErrorCode())
 			return &ec2.DescribeInstancesOutput{}
 		}
 		log.Warnf("error occurred describing instance %s: %v", id, err)
