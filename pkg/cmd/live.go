@@ -628,6 +628,74 @@ func min(a, b int) int {
 	return b
 }
 
+// setColumnWidths sets explicit column widths to reduce padding on small columns.
+func setColumnWidths(table *widgets.Table, mode ViewMode, state *LiveState) {
+	if len(table.Rows) == 0 {
+		return
+	}
+
+	numCols := len(table.Rows[0])
+	widths := make([]int, numCols)
+
+	switch mode {
+	case ViewNodes:
+		// NODE, STATUS
+		widths[0] = 0  // Auto-size for node names
+		widths[1] = 10 // STATUS: "Ready"/"NotReady"
+
+		colIdx := 2
+		if state.showNodeVersion {
+			widths[colIdx] = 12 // VERSION: "v1.28.5-eks..."
+			colIdx++
+		}
+		if state.showNodeAge {
+			widths[colIdx] = 6 // AGE: "30d", "1d12hr"
+			colIdx++
+		}
+		if state.showNodeGroup {
+			widths[colIdx] = 0 // Auto-size for node group names
+			colIdx++
+		}
+
+		// Resource columns (auto-size)
+		for i := colIdx; i < numCols; i++ {
+			if i == numCols-1 && !state.showCloudInfo {
+				// PODS column (last column if no cloud info)
+				widths[i] = 6
+			} else {
+				widths[i] = 0 // Auto-size resource columns
+			}
+		}
+
+	case ViewNamespaces, ViewPods, ViewDeployments:
+		// First column: name (auto-size)
+		widths[0] = 0
+
+		// Resource columns (auto-size)
+		for i := 1; i < numCols; i++ {
+			if i == numCols-1 {
+				// Last column: PODS or STATUS
+				widths[i] = 8
+			} else {
+				widths[i] = 0
+			}
+		}
+	}
+
+	// Only set widths if we have meaningful constraints
+	hasConstraints := false
+	for _, w := range widths {
+		if w > 0 {
+			hasConstraints = true
+			break
+		}
+	}
+
+	if hasConstraints {
+		table.ColumnWidths = widths
+	}
+}
+
 func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) error {
 	termWidth, termHeight := ui.TerminalDimensions()
 
@@ -691,6 +759,9 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	state.table.BorderStyle = ui.NewStyle(ui.ColorCyan)
 	state.table.SetRect(0, summaryHeight, termWidth, tableHeight+summaryHeight)
 	state.table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
+
+	// Set column widths to reduce padding on small columns
+	setColumnWidths(state.table, state.mode, state)
 
 	// Apply row coloring based on utilization (skip for deployments - they don't have usage metrics)
 	if state.mode != ViewDeployments {
