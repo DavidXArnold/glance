@@ -211,6 +211,11 @@ Switch between views using keyboard shortcuts:
 | `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
 | `s` | Cycle **sort mode** (Status → Name → CPU → Memory) |
 | `c` | Toggle **compact mode** (hide summary and help) |
+| `i` | Toggle **cloud info** columns (Provider, Region, Instance Type) |
+| `v` | Toggle **node version** column (Kubelet version) |
+| `a` | Toggle **node age** column (time since creation) |
+| `+/-` | Increase/decrease display **limits** (nodes or pods by 10) |
+| `l` | Cycle through **preset limits** (20/50/100/500/1000) |
 | `↑↓` | Select namespace (in Namespaces view) |
 | `Enter` | View pods for selected namespace (in Namespaces view) |
 | `←→` | Navigate namespaces (in Pods/Deployments view) |
@@ -559,7 +564,24 @@ show-cloud-provider: true
 exact: false
 log-level: warn  # trace, debug, info, warn, error, fatal
 namespace: ""    # Initial namespace for live view (empty = all namespaces)
+
+# Cloud info caching (live mode only)
+cloud-cache-ttl: 5m      # TTL for cloud provider info cache (default: 5m)
+cloud-cache-disk: false  # Persist cache to ~/.glance/cloud-cache.json (default: false)
+
+# Column visibility (live mode - persisted when toggled with i/v/a keys)
+show-node-version: false # Show node version column (default: false)
+show-node-age: false     # Show node age column (default: false)
 ```
+
+**Cloud Cache Settings:**
+- `cloud-cache-ttl`: Duration to cache AWS/GCP instance type info. Valid units: s, m, h. Example: `300s`, `5m`, `1h`
+- `cloud-cache-disk`: When `true`, cache persists between sessions in `~/.glance/cloud-cache.json`
+
+**Column Visibility:**
+- Initial state loaded from config file
+- Changes made with `i` (cloud), `v` (version), `a` (age) keys are automatically saved
+- Requires config file to exist for persistence
 
 ### Logging
 

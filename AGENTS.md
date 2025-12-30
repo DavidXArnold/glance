@@ -88,10 +88,18 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 
 ## Release Process
 
-1. Update `version/version.go` with new version (e.g., `"0.1.3"`)
-2. Commit: `git commit -m "chore: bump version to 0.1.3"`
-3. Push to main: `git push origin main`
-4. Create and push tag: `git tag v0.1.3 && git push origin v0.1.3`
+**CRITICAL: Always update CHANGELOG.md when releasing a new version!**
+
+1. Update `CHANGELOG.md`:
+   - Move items from `[Unreleased]` section to new version section with date
+   - Use proper categories: Added, Changed, Deprecated, Removed, Fixed, Security
+   - Follow [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format
+   - Create new empty `[Unreleased]` section at the top
+   - Be descriptive but concise - focus on user-facing changes
+2. Update `version/version.go` with new version (e.g., `"0.1.3"`)
+3. Commit both files: `git commit -m "chore: bump version to 0.1.3"`
+4. Push to main: `git push origin main`
+5. Create and push tag: `git tag v0.1.3 && git push origin v0.1.3`
 
 **CI automatically:**
 - Runs lint, test, build
@@ -99,6 +107,19 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 - Uploads to GitLab Package Registry
 - Creates GitLab Release
 - Updates `plugins/krew/glance.yaml` with new checksums
+
+**Version naming:**
+- **Patch** (0.1.X): Bug fixes, minor improvements, documentation updates
+- **Minor** (0.X.0): New features, non-breaking changes
+- **Major** (X.0.0): Breaking changes, major refactors
+
+**Changelog Guidelines:**
+- **Added**: New features, capabilities, or flags
+- **Changed**: Changes to existing functionality or defaults
+- **Deprecated**: Features that will be removed in future versions
+- **Removed**: Features that have been removed
+- **Fixed**: Bug fixes with brief description of the issue
+- **Security**: Security-related fixes or improvements
 
 ## CI/CD Notes
 
@@ -110,6 +131,7 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 ## Important Files to Keep in Sync
 
 When releasing:
+- `CHANGELOG.md` - **Manual**: MUST update with every release - move Unreleased items to versioned section
 - `version/version.go` - **Manual**: Update before tagging
 - `plugins/krew/glance.yaml` - **Auto**: Updated by CI
 
@@ -266,6 +288,60 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
 5. Tag and release
 6. Update README.md with new CLI flags and performance notes
 7. Submit Krew plugin PR to kubernetes-sigs/krew-index
+
+---
+
+## Current Session Status (December 29, 2025 - Documentation Update)
+
+### Completed on current branch
+- **Bug fixes for live view** - resolved two critical production issues
+- Fixed panic when toggling cloud info:
+  - Added `len(id) < 2` check before accessing `id[1]` in provider ID parsing
+  - Prevents "index out of range" crash with invalid provider IDs
+  - Logs debug message and continues gracefully on malformed IDs
+- Fixed progress bars appearing on metadata columns:
+  - Modified `addProgressBars()` signature to accept `baseColCount` parameter
+  - Calculates column offset based on optional columns (version, age, cloud)
+  - Only applies progress bars to resource columns (CPU_ALLOC, CPU_USAGE, MEM_ALLOC, MEM_USAGE)
+  - Skips first N columns where N = 2 (NODE, STATUS) + optional column count
+- **Documentation updates:**
+  - Created `CHANGELOG.md` using Keep a Changelog format
+  - Documented all versions from 0.1.15 to Unreleased (0.1.21)
+  - Updated `AGENTS.md` with changelog maintenance requirements
+  - Updated `README.md` keyboard controls table with new keys (i/v/a/+/-/l)
+  - Added release process instructions to AGENTS.md emphasizing changelog updates
+
+### Key Files Changed
+- `pkg/cmd/live.go` - two critical bug fixes (panic prevention, progress bar positioning)
+- `README.md` - keyboard controls table expanded with 6 new key bindings
+- `CHANGELOG.md` - created with comprehensive version history
+- `AGENTS.md` - updated release process section with changelog requirements
+
+### Architecture Notes
+- **Provider ID validation**: Now checks array length before accessing elements to prevent panics
+- **Dynamic progress bars**: baseColCount parameter ensures progress bars only render on numeric resource columns
+- **Changelog format**: Follows Keep a Changelog 1.0.0 specification with semantic versioning
+
+### Testing Notes
+- Build successful with `make build` after bug fixes
+- No compilation errors
+- All formatting correct
+- Ready for runtime testing with live cluster
+
+### Next Steps
+1. Run full test suite (`make test`)
+2. Run linter (`make lint`)
+3. Test live view functionality with real cluster:
+   - Toggle cloud info with `i` key (verify no panic)
+   - Toggle version column with `v` key (verify no progress bar)
+   - Toggle age column with `a` key (verify no progress bar)
+   - Adjust limits with `+/-/l` keys
+4. Commit changes to branch
+5. Create MR for review
+6. After merge, bump version to v0.1.21 in `version/version.go`
+7. Update `CHANGELOG.md` - move Unreleased items to v0.1.21 section with date
+8. Tag and release v0.1.21
+9. CI will automatically update krew plugin manifest
 
 ---
 

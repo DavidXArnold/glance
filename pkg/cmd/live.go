@@ -15,8 +15,12 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +29,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -98,6 +103,132 @@ type ResourceMetrics struct {
 	MemCapacity float64
 }
 
+// CloudCacheEntry holds cached cloud provider information with TTL.
+type CloudCacheEntry struct {
+	InstanceType string
+	Timestamp    time.Time
+}
+
+// CloudCache holds the in-memory cloud info cache with TTL.
+type CloudCache struct {
+	mu      sync.RWMutex
+	cache   map[string]*CloudCacheEntry
+	ttl     time.Duration
+	useDisk bool
+}
+
+// NewCloudCache creates a new cloud cache with the specified TTL.
+func NewCloudCache(ttl time.Duration, useDisk bool) *CloudCache {
+	c := &CloudCache{
+		cache:   make(map[string]*CloudCacheEntry),
+		ttl:     ttl,
+		useDisk: useDisk,
+	}
+	if useDisk {
+		c.loadFromDisk()
+	}
+	return c
+}
+
+// Get retrieves a cached cloud info entry if it exists and is not expired.
+func (c *CloudCache) Get(providerID string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.cache[providerID]
+	if !ok {
+		return "", false
+	}
+	if time.Since(entry.Timestamp) > c.ttl {
+		return "", false
+	}
+	return entry.InstanceType, true
+}
+
+// Set stores a cloud info entry in the cache.
+func (c *CloudCache) Set(providerID, instanceType string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cache[providerID] = &CloudCacheEntry{
+		InstanceType: instanceType,
+		Timestamp:    time.Now(),
+	}
+	if c.useDisk {
+		// Save to disk in background
+		go c.saveToDisk()
+	}
+}
+
+// getCachePath returns the path to the disk cache file.
+func (c *CloudCache) getCachePath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Debugf("failed to get home directory: %v", err)
+		return ""
+	}
+	return filepath.Join(homeDir, ".glance", "cloud-cache.json")
+}
+
+// loadFromDisk loads cached cloud info from disk.
+func (c *CloudCache) loadFromDisk() {
+	cachePath := c.getCachePath()
+	if cachePath == "" {
+		return
+	}
+
+	// #nosec G304 - cachePath is computed from user home directory, not user input
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Debugf("failed to read cloud cache from disk: %v", err)
+		}
+		return
+	}
+
+	var diskCache map[string]*CloudCacheEntry
+	if err := json.Unmarshal(data, &diskCache); err != nil {
+		log.Debugf("failed to unmarshal cloud cache: %v", err)
+		return
+	}
+
+	// Load entries that haven't expired
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for providerID, entry := range diskCache {
+		if time.Since(entry.Timestamp) <= c.ttl {
+			c.cache[providerID] = entry
+		}
+	}
+	log.Debugf("loaded %d cloud cache entries from disk", len(c.cache))
+}
+
+// saveToDisk saves the current cache to disk.
+func (c *CloudCache) saveToDisk() {
+	cachePath := c.getCachePath()
+	if cachePath == "" {
+		return
+	}
+
+	// Ensure directory exists
+	cacheDir := filepath.Dir(cachePath)
+	if err := os.MkdirAll(cacheDir, 0750); err != nil {
+		log.Debugf("failed to create cache directory: %v", err)
+		return
+	}
+
+	c.mu.RLock()
+	data, err := json.Marshal(c.cache)
+	c.mu.RUnlock()
+
+	if err != nil {
+		log.Debugf("failed to marshal cloud cache: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(cachePath, data, 0600); err != nil {
+		log.Debugf("failed to write cloud cache to disk: %v", err)
+	}
+}
+
 // LiveState holds the state for the live TUI
 type LiveState struct {
 	mode                   ViewMode
@@ -113,6 +244,9 @@ type LiveState struct {
 	showPercentages        bool
 	compactMode            bool
 	showRawResources       bool // Toggle between ratio format and raw resource values
+	showCloudInfo          bool // Toggle cloud provider information display
+	showNodeVersion        bool // Toggle node version display
+	showNodeAge            bool // Toggle node age display
 	// Scaling options
 	nodeLimit     int
 	podLimit      int
@@ -122,6 +256,8 @@ type LiveState struct {
 	totalPods     int
 	// Namespace list for navigation
 	namespaceList []string
+	// Cloud info caching
+	cloudCache *CloudCache
 }
 
 // NewLiveCmd creates the live subcommand
@@ -225,6 +361,10 @@ func runLive(
 		podLimit:               podLimit,
 		maxConcurrent:          maxConcurrent,
 		sortMode:               sortMode,
+		cloudCache:             NewCloudCache(viper.GetDuration("cloud-cache-ttl"), viper.GetBool("cloud-cache-disk")),
+		showCloudInfo:          viper.GetBool("show-cloud-provider"),
+		showNodeVersion:        viper.GetBool("show-node-version"),
+		showNodeAge:            viper.GetBool("show-node-age"),
 	}
 
 	// Check cluster size and warn for large clusters
@@ -312,6 +452,34 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		state.showPercentages = !state.showPercentages
 	case "r":
 		state.showRawResources = !state.showRawResources
+	case "i":
+		state.showCloudInfo = !state.showCloudInfo
+		saveColumnPreferences(state)
+	case "v":
+		state.showNodeVersion = !state.showNodeVersion
+		saveColumnPreferences(state)
+	case "a":
+		state.showNodeAge = !state.showNodeAge
+		saveColumnPreferences(state)
+	case "+", "=":
+		// Increase limits
+		switch state.mode {
+		case ViewNodes:
+			state.nodeLimit = min(state.nodeLimit+10, 1000)
+		case ViewPods:
+			state.podLimit = min(state.podLimit+10, 10000)
+		}
+	case "-", "_":
+		// Decrease limits
+		switch state.mode {
+		case ViewNodes:
+			state.nodeLimit = max(state.nodeLimit-10, 10)
+		case ViewPods:
+			state.podLimit = max(state.podLimit-10, 10)
+		}
+	case "l":
+		// Cycle through preset limits
+		cycleLimits(state)
 	case "c":
 		state.compactMode = !state.compactMode
 	case "s":
@@ -368,6 +536,61 @@ func handleRightArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
 	}
 }
 
+// cycleLimits cycles through preset limit values.
+func cycleLimits(state *LiveState) {
+	presets := []int{20, 50, 100, 500, 1000}
+	current := state.nodeLimit
+	if state.mode == ViewPods {
+		current = state.podLimit
+	}
+
+	// Find next preset
+	nextIdx := 0
+	for i, p := range presets {
+		if current < p {
+			nextIdx = i
+			break
+		}
+	}
+
+	switch state.mode {
+	case ViewNodes:
+		state.nodeLimit = presets[nextIdx]
+	case ViewPods:
+		state.podLimit = presets[nextIdx]
+	}
+}
+
+// saveColumnPreferences saves column visibility preferences to viper config.
+func saveColumnPreferences(state *LiveState) {
+	viper.Set("show-cloud-provider", state.showCloudInfo)
+	viper.Set("show-node-version", state.showNodeVersion)
+	viper.Set("show-node-age", state.showNodeAge)
+
+	// Save to config file if configured
+	if viper.ConfigFileUsed() != "" {
+		if err := viper.WriteConfig(); err != nil {
+			log.Debugf("failed to save column preferences: %v", err)
+		}
+	}
+}
+
+// min returns the minimum of two integers.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// max returns the maximum of two integers.
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) error {
 	termWidth, termHeight := ui.TerminalDimensions()
 
@@ -395,7 +618,21 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 
 	// Add progress bars to data if enabled
 	if state.showBars && len(metrics) > 0 {
-		data = addProgressBars(data, metrics, state.showPercentages)
+		// Calculate base column count (number of non-resource columns to skip)
+		baseColCount := 1 // Default for namespace/pod/deployment views (just name column)
+
+		if state.mode == ViewNodes {
+			// NODE, STATUS are the base columns
+			baseColCount = 2
+			// Add optional columns that come before resource columns
+			if state.showNodeVersion {
+				baseColCount++
+			}
+			if state.showNodeAge {
+				baseColCount++
+			}
+		}
+		data = addProgressBars(data, metrics, state.showPercentages, baseColCount)
 	}
 
 	// Calculate summary stats
@@ -438,16 +675,27 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 
 	// Render summary bar at the top (if not compact)
 	if !state.compactMode {
-		renderSummaryBar(summaryStats, termWidth, state.mode, state.selectedNamespace)
+		renderSummaryBar(
+			summaryStats, termWidth, state.mode, state.selectedNamespace,
+			state.nodeLimit, state.podLimit, state.totalNodes, state.totalPods,
+		)
 	}
 
-	// Update status bar
+	// Update status bar with limit information
 	modeStr := getModeString(state.mode)
-	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s | Refresh: %v | Items: %d",
+	limitInfo := ""
+	switch state.mode {
+	case ViewNodes:
+		limitInfo = fmt.Sprintf(" | Showing: %d/%d nodes", min(state.nodeLimit, state.totalNodes), state.totalNodes)
+	case ViewPods:
+		limitInfo = fmt.Sprintf(" | Showing: %d/%d pods", min(state.podLimit, state.totalPods), state.totalPods)
+	}
+	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s | Refresh: %v | Items: %d%s",
 		modeStr,
 		state.lastUpdate.Format("15:04:05"),
 		state.refreshInterval,
-		len(data)/getRowMultiplier(state.showBars))
+		len(data)/getRowMultiplier(state.showBars),
+		limitInfo)
 	state.statusBar.Border = false
 	state.statusBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+2)
 
@@ -524,7 +772,10 @@ func calculateSummaryStats(metrics []ResourceMetrics) SummaryStats {
 }
 
 // renderSummaryBar renders a summary bar at the top of the screen
-func renderSummaryBar(stats SummaryStats, width int, mode ViewMode, selectedNamespace string) {
+func renderSummaryBar(
+	stats SummaryStats, width int, mode ViewMode, selectedNamespace string,
+	nodeLimit, podLimit, totalNodes, totalPods int,
+) {
 	summary := widgets.NewParagraph()
 	summary.Border = true
 	summary.BorderStyle = ui.NewStyle(ui.ColorCyan)
@@ -549,12 +800,21 @@ func renderSummaryBar(stats SummaryStats, width int, mode ViewMode, selectedName
 		namespaceInfo = fmt.Sprintf(" │ [Namespace: [←→]](fg:cyan,mod:bold) [%s](fg:white,mod:bold)", nsDisplay)
 	}
 
+	// Add limit display for nodes and pods
+	limitInfo := ""
+	if mode == ViewNodes && totalNodes > 0 {
+		limitInfo = fmt.Sprintf(" │ [Limit:](fg:cyan,mod:bold) [%d/%d](fg:white)", min(nodeLimit, totalNodes), totalNodes)
+	} else if mode == ViewPods && totalPods > 0 {
+		limitInfo = fmt.Sprintf(" │ [Limit:](fg:cyan,mod:bold) [%d/%d](fg:white)", min(podLimit, totalPods), totalPods)
+	}
+
 	summary.Text = fmt.Sprintf(
-		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%% %s",
+		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s",
 		healthIcon, warnIcon, critIcon,
 		cpuBar, stats.AvgCPUUsage,
 		memBar, stats.AvgMemUsage,
 		namespaceInfo,
+		limitInfo,
 	)
 
 	summary.SetRect(0, 0, width, 3)
@@ -1026,45 +1286,50 @@ func fetchPodData(
 
 // nodeRowData holds data for a single node row for parallel processing.
 type nodeRowData struct {
-	row      []string
-	metrics  ResourceMetrics
-	isReady  bool
-	cpuUsage float64
-	memUsage float64
+	row          []string
+	metrics      ResourceMetrics
+	isReady      bool
+	cpuUsage     float64
+	memUsage     float64
+	creationTime time.Time
+	nodeVersion  string
+	providerID   string
+	region       string
+	instanceType string
 }
 
-func fetchNodeData(
-	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	gc *GlanceConfig,
-	state *LiveState,
-) ([]string, [][]string, []ResourceMetrics, error) {
-	header := []string{
-		"NODE",
-		"STATUS",
+// buildNodeHeader constructs the table header based on toggle states.
+func buildNodeHeader(state *LiveState) []string {
+	header := []string{"NODE", "STATUS"}
+
+	if state.showNodeVersion {
+		header = append(header, "VERSION")
+	}
+	if state.showNodeAge {
+		header = append(header, "AGE")
+	}
+
+	header = append(header,
 		"CPU ALLOCATED/CAPACITY",
 		"CPU USAGE/CAPACITY",
 		"MEMORY ALLOCATED/CAPACITY",
 		"MEMORY USAGE/CAPACITY",
 		"PODS",
+	)
+
+	if state.showCloudInfo {
+		header = append(header, "PROVIDER", "REGION", "INSTANCE TYPE")
 	}
 
-	// Use watch cache for faster response (resourceVersion="0")
-	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-		ResourceVersion: "0",
-	})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to list nodes: %w", err)
-	}
+	return header
+}
 
-	state.totalNodes = len(nodes.Items)
-
-	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
-	if err != nil {
-		return header, [][]string{}, []ResourceMetrics{}, nil
-	}
-
-	// Fetch all data in parallel using errgroup
+// fetchNodeMetricsAndPods fetches node metrics and pods in parallel.
+func fetchNodeMetricsAndPods(
+	ctx context.Context,
+	k8sClient *kubernetes.Clientset,
+	metricsClient *metricsclientset.Clientset,
+) (*metricsV1beta1api.NodeMetricsList, *v1.PodList, error) {
 	g, gCtx := errgroup.WithContext(ctx)
 
 	var nodeMetrics *metricsV1beta1api.NodeMetricsList
@@ -1089,8 +1354,207 @@ func fetchNodeData(
 		return err
 	})
 
-	// Wait for parallel fetches to complete
 	if err := g.Wait(); err != nil {
+		return nodeMetrics, allPods, err
+	}
+
+	return nodeMetrics, allPods, nil
+}
+
+// processNodeRow builds a single node row with metrics.
+func processNodeRow(
+	node v1.Node,
+	pods []v1.Pod,
+	metricsMap map[string]*metricsV1beta1api.NodeMetrics,
+	state *LiveState,
+) ([]string, ResourceMetrics, nodeRowData) {
+	// Get node status
+	isReady := false
+	nodeStatus := "Unknown"
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == v1.NodeReady {
+			if condition.Status == v1.ConditionTrue {
+				nodeStatus = statusReady + " " + nodeStatusReady
+				isReady = true
+			} else {
+				nodeStatus = statusNotReady + " " + nodeStatusNotReady
+			}
+			break
+		}
+	}
+
+	cpuCap := node.Status.Capacity.Cpu()
+	memCap := node.Status.Capacity.Memory()
+	cpuAlloc := resource.NewMilliQuantity(0, resource.DecimalSI)
+	memAlloc := resource.NewQuantity(0, resource.BinarySI)
+	cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
+	memUsage := resource.NewQuantity(0, resource.BinarySI)
+
+	// Calculate allocated resources from pods
+	podCount := len(pods)
+	for _, pod := range pods {
+		for _, container := range pod.Spec.Containers {
+			if req := container.Resources.Requests.Cpu(); req != nil {
+				cpuAlloc.Add(*req)
+			}
+			if req := container.Resources.Requests.Memory(); req != nil {
+				memAlloc.Add(*req)
+			}
+		}
+	}
+
+	if nm, ok := metricsMap[node.Name]; ok {
+		cpuUsage.Add(nm.Usage[v1.ResourceCPU])
+		memUsage.Add(nm.Usage[v1.ResourceMemory])
+	}
+
+	cpuUsagePct := float64(0)
+	if cpuCap.MilliValue() > 0 {
+		cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuCap.MilliValue()) * 100
+	}
+	memUsagePct := float64(0)
+	if memCap.Value() > 0 {
+		memUsagePct = float64(memUsage.Value()) / float64(memCap.Value()) * 100
+	}
+
+	// Build row with all columns
+	row := []string{node.Name, nodeStatus}
+
+	// Add optional columns based on toggles
+	if state.showNodeVersion {
+		row = append(row, node.Status.NodeInfo.KubeletVersion)
+	}
+	if state.showNodeAge {
+		row = append(row, glanceutil.FormatAge(node.CreationTimestamp.Time))
+	}
+
+	// Add resource columns
+	row = append(row,
+		formatResourceRatio(cpuAlloc, cpuCap, false, state.showRawResources),
+		formatResourceRatio(cpuUsage, cpuCap, false, state.showRawResources),
+		formatResourceRatio(memAlloc, memCap, true, state.showRawResources),
+		formatResourceRatio(memUsage, memCap, true, state.showRawResources),
+		fmt.Sprintf("%d", podCount),
+	)
+
+	metrics := ResourceMetrics{
+		CPURequest:  float64(cpuAlloc.MilliValue()) / 1000.0,
+		CPULimit:    float64(cpuCap.MilliValue()) / 1000.0,
+		CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
+		CPUCapacity: float64(cpuCap.MilliValue()) / 1000.0,
+		MemRequest:  float64(memAlloc.Value()),
+		MemLimit:    float64(memCap.Value()),
+		MemUsage:    float64(memUsage.Value()),
+		MemCapacity: float64(memCap.Value()),
+	}
+
+	rowData := nodeRowData{
+		row:          row,
+		metrics:      metrics,
+		isReady:      isReady,
+		cpuUsage:     cpuUsagePct,
+		memUsage:     memUsagePct,
+		creationTime: node.CreationTimestamp.Time,
+		nodeVersion:  node.Status.NodeInfo.KubeletVersion,
+		providerID:   node.Spec.ProviderID,
+	}
+
+	// Get region from labels
+	if region, ok := node.Labels["topology.kubernetes.io/region"]; ok {
+		rowData.region = region
+	}
+
+	return row, metrics, rowData
+}
+
+// fetchCloudInfoForNodes fetches cloud provider info for all nodes with caching.
+func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
+	if !viper.GetBool("show-cloud-provider") || !state.showCloudInfo {
+		return
+	}
+
+	var cloudWg sync.WaitGroup
+	var mu sync.Mutex
+
+	for i := range nodeData {
+		if nodeData[i].providerID == "" {
+			continue
+		}
+
+		cp, id := glanceutil.ParseProviderID(nodeData[i].providerID)
+		// Skip if id array is too short
+		if len(id) < 2 {
+			log.Debugf("invalid provider ID format: %s", nodeData[i].providerID)
+			continue
+		}
+
+		// Check cache first
+		if cachedType, ok := state.cloudCache.Get(nodeData[i].providerID); ok {
+			mu.Lock()
+			nodeData[i].instanceType = cachedType
+			mu.Unlock()
+			continue
+		}
+
+		cloudWg.Add(1)
+		go func(idx int, provider string, instanceID string, providerID string) {
+			defer cloudWg.Done()
+			var instanceType string
+			var err error
+			switch provider {
+			case "aws":
+				instanceType, err = getAWSNodeInfo(instanceID)
+			case "gce":
+				instanceType, err = getGCENodeInfo(instanceID)
+			}
+			if err == nil && instanceType != "" {
+				// Cache the result
+				state.cloudCache.Set(providerID, instanceType)
+				mu.Lock()
+				nodeData[idx].instanceType = instanceType
+				mu.Unlock()
+			}
+		}(i, cp, id[1], nodeData[i].providerID)
+	}
+	cloudWg.Wait()
+
+	// Add cloud columns to rows
+	for i := range nodeData {
+		provider := ""
+		if nodeData[i].providerID != "" {
+			cp, _ := glanceutil.ParseProviderID(nodeData[i].providerID)
+			provider = strings.ToUpper(cp)
+		}
+		nodeData[i].row = append(nodeData[i].row, provider, nodeData[i].region, nodeData[i].instanceType)
+	}
+}
+
+func fetchNodeData(
+	ctx context.Context,
+	k8sClient *kubernetes.Clientset,
+	gc *GlanceConfig,
+	state *LiveState,
+) ([]string, [][]string, []ResourceMetrics, error) {
+	header := buildNodeHeader(state)
+
+	// Use watch cache for faster response (resourceVersion="0")
+	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		ResourceVersion: "0",
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	state.totalNodes = len(nodes.Items)
+
+	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
+	if err != nil {
+		return header, [][]string{}, []ResourceMetrics{}, nil
+	}
+
+	// Fetch all data in parallel
+	nodeMetrics, allPods, err := fetchNodeMetricsAndPods(ctx, k8sClient, metricsClient)
+	if err != nil {
 		log.Debugf("Error fetching metrics or pods: %v", err)
 	}
 
@@ -1126,89 +1590,18 @@ func fetchNodeData(
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
 
-			// Get node status
-			isReady := false
-			nodeStatus := "Unknown"
-			for _, condition := range node.Status.Conditions {
-				if condition.Type == v1.NodeReady {
-					if condition.Status == v1.ConditionTrue {
-						nodeStatus = statusReady + " " + nodeStatusReady
-						isReady = true
-					} else {
-						nodeStatus = statusNotReady + " " + nodeStatusNotReady
-					}
-					break
-				}
-			}
-
-			cpuCap := node.Status.Capacity.Cpu()
-			memCap := node.Status.Capacity.Memory()
-			cpuAlloc := resource.NewMilliQuantity(0, resource.DecimalSI)
-			memAlloc := resource.NewQuantity(0, resource.BinarySI)
-			cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
-			memUsage := resource.NewQuantity(0, resource.BinarySI)
-
-			// Use pre-fetched pods grouped by node
 			pods := podsByNode[node.Name]
-			podCount := len(pods)
-			for _, pod := range pods {
-				for _, container := range pod.Spec.Containers {
-					if req := container.Resources.Requests.Cpu(); req != nil {
-						cpuAlloc.Add(*req)
-					}
-					if req := container.Resources.Requests.Memory(); req != nil {
-						memAlloc.Add(*req)
-					}
-				}
-			}
-
-			if nm, ok := metricsMap[node.Name]; ok {
-				cpuUsage.Add(nm.Usage[v1.ResourceCPU])
-				memUsage.Add(nm.Usage[v1.ResourceMemory])
-			}
-
-			cpuUsagePct := float64(0)
-			if cpuCap.MilliValue() > 0 {
-				cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuCap.MilliValue()) * 100
-			}
-			memUsagePct := float64(0)
-			if memCap.Value() > 0 {
-				memUsagePct = float64(memUsage.Value()) / float64(memCap.Value()) * 100
-			}
-
-			row := []string{
-				node.Name,
-				nodeStatus,
-				formatResourceRatio(cpuAlloc, cpuCap, false, state.showRawResources),
-				formatResourceRatio(cpuUsage, cpuCap, false, state.showRawResources),
-				formatResourceRatio(memAlloc, memCap, true, state.showRawResources),
-				formatResourceRatio(memUsage, memCap, true, state.showRawResources),
-				fmt.Sprintf("%d", podCount),
-			}
-
-			metrics := ResourceMetrics{
-				CPURequest:  float64(cpuAlloc.MilliValue()) / 1000.0,
-				CPULimit:    float64(cpuCap.MilliValue()) / 1000.0,
-				CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
-				CPUCapacity: float64(cpuCap.MilliValue()) / 1000.0,
-				MemRequest:  float64(memAlloc.Value()),
-				MemLimit:    float64(memCap.Value()),
-				MemUsage:    float64(memUsage.Value()),
-				MemCapacity: float64(memCap.Value()),
-			}
+			_, _, rowData := processNodeRow(node, pods, metricsMap, state)
 
 			mu.Lock()
-			nodeData[idx] = nodeRowData{
-				row:      row,
-				metrics:  metrics,
-				isReady:  isReady,
-				cpuUsage: cpuUsagePct,
-				memUsage: memUsagePct,
-			}
+			nodeData[idx] = rowData
 			mu.Unlock()
 		}(i, node)
 	}
 	wg.Wait()
+
+	// Fetch cloud info asynchronously if enabled
+	fetchCloudInfoForNodes(nodeData, state)
 
 	// Sort based on sort mode
 	sortNodeData(nodeData, state.sortMode)
@@ -1344,8 +1737,11 @@ func fetchDeploymentData(
 
 func getHelpText(mode ViewMode) string {
 	base := "[n]NS [p]Pods [o]Nodes [d]Deploy | [b]Bars [%]Pct [r]Raw Data [s]Sort [c]Compact | [q]Quit"
+	if mode == ViewNodes {
+		return base + " | [i]Cloud [v]Version [a]Age [+/-]Limits [l]Presets"
+	}
 	if mode == ViewPods || mode == ViewDeployments {
-		return base + " | [←→]NS"
+		return base + " | [←→]NS [+/-]Limits [l]Presets"
 	}
 	if mode == ViewNamespaces {
 		return base + " | [↑↓]Select [Enter]View"
@@ -1529,7 +1925,7 @@ func multiplyQuantity(q *resource.Quantity, multiplier int) *resource.Quantity {
 }
 
 // addProgressBars adds visual progress bars under resource values
-func addProgressBars(data [][]string, metrics []ResourceMetrics, showPercentages bool) [][]string {
+func addProgressBars(data [][]string, metrics []ResourceMetrics, showPercentages bool, baseColCount int) [][]string {
 	if len(data) == 0 || len(metrics) == 0 {
 		return data
 	}
@@ -1546,32 +1942,27 @@ func addProgressBars(data [][]string, metrics []ResourceMetrics, showPercentages
 		m := metrics[i]
 		bars := make([]string, len(row))
 
-		// First column is usually name, skip it
-		bars[0] = ""
-
-		// Generate bars for each metric column
-		// Assuming columns are: NAME, CPU REQ, CPU LIMIT, CPU USAGE, MEM REQ, MEM LIMIT, MEM USAGE, ...
-		if len(row) >= 4 {
-			// CPU Request bar (column 1)
-			bars[1] = makeProgressBar(m.CPURequest, m.CPUCapacity, 10, showPercentages)
-			// CPU Limit bar (column 2)
-			bars[2] = makeProgressBar(m.CPULimit, m.CPUCapacity, 10, showPercentages)
-			// CPU Usage bar (column 3)
-			bars[3] = makeProgressBar(m.CPUUsage, m.CPUCapacity, 10, showPercentages)
-		}
-
-		if len(row) >= 7 {
-			// Memory Request bar (column 4)
-			bars[4] = makeProgressBar(m.MemRequest, m.MemCapacity, 10, showPercentages)
-			// Memory Limit bar (column 5)
-			bars[5] = makeProgressBar(m.MemLimit, m.MemCapacity, 10, showPercentages)
-			// Memory Usage bar (column 6)
-			bars[6] = makeProgressBar(m.MemUsage, m.MemCapacity, 10, showPercentages)
-		}
-
-		// Fill remaining columns
-		for j := 7; j < len(row); j++ {
+		// Initialize all bars as empty
+		for j := range bars {
 			bars[j] = ""
+		}
+
+		// baseColCount tells us where resource columns start
+		// For namespace view: NAMESPACE (1 col) -> resources start at col 1
+		// For node view: NODE, STATUS (2 cols) + optional cols -> resources start after baseColCount
+		resourceStartCol := baseColCount
+
+		// Only add progress bars to resource columns (CPU and Memory)
+		// We expect at least 4 resource columns after baseColCount
+		if len(row) >= resourceStartCol+4 {
+			// CPU Allocated bar
+			bars[resourceStartCol] = makeProgressBar(m.CPURequest, m.CPUCapacity, 10, showPercentages)
+			// CPU Usage bar
+			bars[resourceStartCol+1] = makeProgressBar(m.CPUUsage, m.CPUCapacity, 10, showPercentages)
+			// Memory Allocated bar
+			bars[resourceStartCol+2] = makeProgressBar(m.MemRequest, m.MemCapacity, 10, showPercentages)
+			// Memory Usage bar
+			bars[resourceStartCol+3] = makeProgressBar(m.MemUsage, m.MemCapacity, 10, showPercentages)
 		}
 
 		result = append(result, bars)

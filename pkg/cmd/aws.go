@@ -16,6 +16,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -23,10 +24,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func getAWSNodeInfo(id string) *ec2.DescribeInstancesOutput {
+func getAWSNodeInfo(id string) (string, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		log.Fatalf("failed to load aws config: %v", err)
+		return "", fmt.Errorf("failed to load aws config: %w", err)
 	}
 	svc := ec2.NewFromConfig(cfg)
 	input := &ec2.DescribeInstancesInput{
@@ -36,11 +37,19 @@ func getAWSNodeInfo(id string) *ec2.DescribeInstancesOutput {
 	if err != nil {
 		var ae smithy.APIError
 		if errors.As(err, &ae) {
-			log.Warnf("error occurred describing instance %s: %v", id, ae.ErrorCode())
-			return &ec2.DescribeInstancesOutput{}
+			log.Debugf("error occurred describing instance %s: %v", id, ae.ErrorCode())
+			return "", err
 		}
-		log.Warnf("error occurred describing instance %s: %v", id, err)
-		return &ec2.DescribeInstancesOutput{}
+		log.Debugf("error occurred describing instance %s: %v", id, err)
+		return "", err
 	}
-	return result
+
+	if len(result.Reservations) > 0 && len(result.Reservations[0].Instances) > 0 {
+		instance := result.Reservations[0].Instances[0]
+		if instance.InstanceType != "" {
+			return string(instance.InstanceType), nil
+		}
+	}
+
+	return "", fmt.Errorf("no instance type found")
 }

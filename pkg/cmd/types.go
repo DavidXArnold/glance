@@ -14,6 +14,8 @@ limitations under the License.
 package cmd
 
 import (
+	"time"
+
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	v1 "k8s.io/api/core/v1"
@@ -33,6 +35,8 @@ type GlanceConfig struct {
 type NodeStats struct {
 	Status                  string              `json:",omitempty"`
 	ProviderID              string              `json:",omitempty"`
+	Region                  string              `json:",omitempty"`
+	InstanceType            string              `json:",omitempty"`
 	NodeInfo                v1.NodeSystemInfo   `json:",omitempty"`
 	CloudInfo               cloudInfo           `json:",omitempty"`
 	AllocatableCPU          *resource.Quantity  `json:",omitempty"`
@@ -46,6 +50,8 @@ type NodeStats struct {
 	UsageCPU                *resource.Quantity  `json:",omitempty"`
 	UsageMemory             *resource.Quantity  `json:",omitempty"`
 	PodInfo                 map[string]*PodInfo `json:",omitempty"`
+	CreationTime            time.Time           `json:",omitempty"`
+	PodCount                int                 `json:",omitempty"`
 }
 
 // NodeMap is a map of node names to their statistics.

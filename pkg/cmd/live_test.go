@@ -313,7 +313,8 @@ func TestAddProgressBars(t *testing.T) {
 		},
 	}
 
-	result := addProgressBars(data, metrics, true)
+	// For namespace view, we have 1 base column (NAMESPACE)
+	result := addProgressBars(data, metrics, true, 1)
 
 	// Should have double the rows (original + bar rows)
 	if len(result) != len(data)*2 {
@@ -330,7 +331,7 @@ func TestAddProgressBars(t *testing.T) {
 		t.Errorf("Progress bar row first column should be empty, got %q", result[1][0])
 	}
 
-	// Progress bar row should have bars
+	// Progress bar row should have bars (starting at column 1 since baseColCount=1)
 	if result[1][1] == "" {
 		t.Errorf("Progress bar row should have CPU request bar")
 	}

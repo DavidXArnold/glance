@@ -15,27 +15,56 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 
-	container "cloud.google.com/go/container/apiv1"
-	containerpb "cloud.google.com/go/container/apiv1/containerpb"
+	compute "cloud.google.com/go/compute/apiv1"
+	computepb "cloud.google.com/go/compute/apiv1/computepb"
 )
 
-func getGKENodePool(nodepool string) (np *containerpb.NodePool) {
+func getGCENodeInfo(id string) (string, error) {
+	// Parse the GCE provider ID to get project, zone, instance name
+	// Format: project-id/zone/instance-name
+	parts := strings.Split(id, "/")
+	if len(parts) < 3 {
+		return "", fmt.Errorf("invalid GCE provider ID format")
+	}
+
+	projectID := parts[0]
+	zone := parts[1]
+	instanceName := parts[2]
+
 	ctx := context.Background()
-	c, err := container.NewClusterManagerClient(ctx)
+	c, err := compute.NewInstancesRESTClient(ctx)
 	if err != nil {
-		log.Warn(err)
-		return nil
+		log.Debugf("failed to create GCE client: %v", err)
+		return "", err
 	}
-	req := &containerpb.GetNodePoolRequest{
-		Name: nodepool,
+	defer func() {
+		if err := c.Close(); err != nil {
+			log.Debugf("failed to close GCE client: %v", err)
+		}
+	}()
+
+	req := &computepb.GetInstanceRequest{
+		Project:  projectID,
+		Zone:     zone,
+		Instance: instanceName,
 	}
-	resp, err := c.GetNodePool(ctx, req)
+
+	instance, err := c.Get(ctx, req)
 	if err != nil {
-		log.Warnf("unable to retrieve nodepool: %v %v", nodepool, err)
-		return nil
+		log.Debugf("failed to get GCE instance: %v", err)
+		return "", err
 	}
-	return resp
+
+	if instance.MachineType != nil {
+		// Extract just the machine type name from the full URL
+		parts := strings.Split(*instance.MachineType, "/")
+		return parts[len(parts)-1], nil
+	}
+
+	return "", fmt.Errorf("no machine type found")
 }
