@@ -16,7 +16,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 - 🔄 **Live Monitoring** - Real-time TUI with auto-refresh for continuous observation
 - 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, and Deployments
 - 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage with ratio formatting
-- ☁️ **Cloud Provider Integration** - Enabled by default, displays AWS and GCP node metadata
+- ☁️ **Cloud Provider Integration** - Auto-detects AWS/GCP and displays node metadata if present; columns hidden on bare-metal unless enabled
 - 🔍 **Flexible Filtering** - Label and field selectors for targeted views
 - 📏 **Value Display Options** - Human-readable ratios or raw Kubernetes resource values
 - 🛠️ **Performance Optimizations** - Parallel API fetching, watch cache, and batch operations for large clusters
@@ -139,9 +139,12 @@ kubectl glance -o pie
 #### Static View Options
 
 ```shell
-# Include cloud provider information (AWS/GCP node details)
-kubectl glance -c
-kubectl glance --cloud-info
+# Show cloud provider columns (AWS/GCP node details) if detected (default)
+kubectl glance
+# Force cloud info columns ON (even on bare-metal)
+kubectl glance --show-cloud-provider=true
+# Force cloud info columns OFF (even if detected)
+kubectl glance --show-cloud-provider=false
 
 # Display pod-level resource details
 kubectl glance -p
@@ -461,15 +464,16 @@ kubectl glance --selector app=nginx --field-selector status.phase=Running -o pre
 
 ## Cloud Provider Integration
 
-Glance can fetch additional metadata from cloud providers (AWS and GCP) to enrich node information. **Cloud provider integration is enabled by default** in version 0.1.18+.
+Glance can fetch additional metadata from cloud providers (AWS and GCP) to enrich node information. **Cloud provider columns are shown by default only if a supported provider is detected (AWS/GCP)**. On bare-metal or unknown providers, columns are hidden unless the flag is set.
 
 ### Cloud Info Display
 
 ```shell
-# Cloud info is shown by default (no flag needed)
+# Cloud info columns are shown by default if AWS/GCP is detected
 kubectl glance
-
-# Disable cloud info if not needed
+# Force cloud info columns ON (even on bare-metal)
+kubectl glance --show-cloud-provider=true
+# Force cloud info columns OFF (even if detected)
 kubectl glance --show-cloud-provider=false
 ```
 
@@ -490,17 +494,18 @@ Cloud provider credentials must be configured:
 - Permissions: `compute.instances.get`
 
 **Behavior:**
-- If no cloud metadata is found, glance automatically disables cloud info fetching to avoid unnecessary API calls
-- Use `--show-cloud-provider=false` or config file to explicitly disable
+- If no supported cloud provider is detected, glance hides cloud columns by default (no API calls made)
+- Use `--show-cloud-provider=true` to force columns on, or `--show-cloud-provider=false` to force off
 
 ### Example with Cloud Info
 
 ```shell
-# View with cloud provider details (default behavior)
+# View with cloud provider columns (if detected)
 kubectl glance -o pretty
-
-# JSON output with cloud metadata
-kubectl glance -c -o json | jq '.nodeMap[].cloudInfo'
+# Force cloud columns ON
+kubectl glance --show-cloud-provider=true -o pretty
+# JSON output always includes cloud fields if present
+kubectl glance -o json | jq '.nodeMap[].cloudInfo'
 ```
 
 ## CLI Flags Reference
@@ -510,7 +515,7 @@ kubectl glance -c -o json | jq '.nodeMap[].cloudInfo'
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
-| `--show-cloud-provider` | `-c` | `true` | Display cloud provider metadata (AWS/GCP instance types, regions) |
+| `--show-cloud-provider` | `-c` | `auto` | Display cloud provider metadata (AWS/GCP instance types, regions) if detected; force on/off with true/false |
 | `--pods` | `-p` | `false` | Display pod-level resource details in static view |
 | `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
 | `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
@@ -560,7 +565,7 @@ Create `~/.glance` for persistent configuration (YAML format):
 ```yaml
 selector: "environment=production"
 output: pretty
-show-cloud-provider: true
+show-cloud-provider: auto   # auto (default), true, or false
 exact: false
 log-level: warn  # trace, debug, info, warn, error, fatal
 namespace: ""    # Initial namespace for live view (empty = all namespaces)

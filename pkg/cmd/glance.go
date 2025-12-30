@@ -181,16 +181,9 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		output, "output", "o", "pretty",
 		"Output format. One of: txt|pretty|json|dash|pie|chart")
 	cmd.PersistentFlags().BoolVarP(
-		cloudInfo, "show-cloud-provider", "c", true,
-		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions). Enabled by default.")
-	cmd.PersistentFlags().BoolVarP(
-		pods, "pods", "p", false,
-		"-p, --pods  Display pod resources. true|false")
-	cmd.PersistentFlags().Bool(
-		"exact", false,
-		"Display exact values instead of human-readable format (e.g., 1000m instead of 1)")
+		cloudInfo, "show-cloud-provider", "c", false,
+		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions). Enabled by default if cloud detected.")
 
-	KubernetesConfigFlags.AddFlags(cmd.Flags())
 	cobra.OnInitialize(initConfig)
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -297,6 +290,30 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	if len(nodes.Items) == 0 {
 		return fmt.Errorf("no Nodes found")
+	}
+
+	// Detect if user explicitly set the flag
+	userSetCloud := false
+	for _, arg := range os.Args {
+		if arg == "--show-cloud-provider" || arg == "-c" || arg == "--no-show-cloud-provider" {
+			userSetCloud = true
+			break
+		}
+	}
+
+	// Detect provider from nodes and set flag if not user-set
+	cloudDetected := false
+	for _, node := range nodes.Items {
+		if node.Spec.ProviderID != "" {
+			cp, _ := glanceutil.ParseProviderID(node.Spec.ProviderID)
+			if cp == providerAWS || cp == providerGCE {
+				cloudDetected = true
+				break
+			}
+		}
+	}
+	if !userSetCloud {
+		viper.Set("show-cloud-provider", cloudDetected)
 	}
 
 	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
