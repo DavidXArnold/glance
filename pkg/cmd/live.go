@@ -257,7 +257,6 @@ type LiveState struct {
 	lastUpdate             time.Time
 	table                  *widgets.Table
 	statusBar              *widgets.Paragraph
-	helpBar                *widgets.Paragraph
 	menuBar                *widgets.Paragraph
 	showBars               bool
 	showPercentages        bool
@@ -280,6 +279,27 @@ type LiveState struct {
 	namespaceList []string
 	// Cloud info caching
 	cloudCache *CloudCache
+	// Settings modal state
+	showSettingsModal  bool
+	settingsModal      *widgets.Table
+	modalSelectedRow   int
+	modalScrollOffset  int
+	modalDirty         bool
+	showConfirmDiscard bool
+	// Pending settings (staged changes before save)
+	pendingShowBars         bool
+	pendingShowPercentages  bool
+	pendingCompactMode      bool
+	pendingShowRawResources bool
+	pendingShowCloudInfo    bool
+	pendingShowNodeVersion  bool
+	pendingShowNodeAge      bool
+	pendingShowNodeGroup    bool
+	pendingFilterNodeGroup  string
+	pendingFilterCapacity   string
+	pendingSortMode         SortMode
+	pendingNodeLimit        int
+	pendingPodLimit         int
 }
 
 // NewLiveCmd creates the live subcommand
@@ -390,6 +410,11 @@ func runLive(
 		showNodeGroup:          viper.GetBool("show-node-group"),
 		filterNodeGroup:        viper.GetString("filter-node-group"),
 		filterCapacityType:     viper.GetString("filter-capacity-type"),
+		showSettingsModal:      false,
+		modalSelectedRow:       0,
+		modalScrollOffset:      0,
+		modalDirty:             false,
+		showConfirmDiscard:     false,
 	}
 
 	// Check cluster size and warn for large clusters
@@ -409,11 +434,8 @@ func runLive(
 	// Initialize UI components
 	state.table = widgets.NewTable()
 	state.statusBar = widgets.NewParagraph()
-	state.helpBar = widgets.NewParagraph()
 	state.menuBar = widgets.NewParagraph()
 
-	state.helpBar.Text = getHelpText(state.mode)
-	state.helpBar.Border = false
 	state.menuBar.Border = false
 
 	// Initial render
@@ -444,23 +466,36 @@ func runLive(
 
 // handleUIEvent processes UI events and returns true if the app should exit.
 func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) bool {
+	// Handle confirmation dialog first if active
+	if state.showConfirmDiscard {
+		return handleConfirmEvent(e, state)
+	}
+
+	// Handle settings modal if active
+	if state.showSettingsModal {
+		return handleModalEvent(e, state)
+	}
+
+	// Main UI event handling
 	switch e.ID {
 	case "q", "<C-c>":
 		return true
+	case "?", "h":
+		// Open settings modal
+		initPendingState(state)
+		state.showSettingsModal = true
+		state.modalSelectedRow = 3 // First selectable row (Progress Bars)
+		state.modalScrollOffset = 0
 	case "n":
 		state.mode = ViewNamespaces
 		state.selectedNamespace = ""
 		state.selectedNamespaceIndex = 0
-		state.helpBar.Text = getHelpText(state.mode)
 	case "p":
 		state.mode = ViewPods
-		state.helpBar.Text = getHelpText(state.mode)
 	case "o":
 		state.mode = ViewNodes
-		state.helpBar.Text = getHelpText(state.mode)
 	case "d":
 		state.mode = ViewDeployments
-		state.helpBar.Text = getHelpText(state.mode)
 	case "<Up>":
 		handleUpArrow(state)
 	case "<Down>":
@@ -471,48 +506,6 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		handleLeftArrow(k8sClient, state)
 	case "<Right>":
 		handleRightArrow(k8sClient, state)
-	case "b":
-		state.showBars = !state.showBars
-	case "%":
-		state.showPercentages = !state.showPercentages
-	case "r":
-		state.showRawResources = !state.showRawResources
-	case "i":
-		state.showCloudInfo = !state.showCloudInfo
-		saveColumnPreferences(state)
-	case "v":
-		state.showNodeVersion = !state.showNodeVersion
-		saveColumnPreferences(state)
-	case "a":
-		state.showNodeAge = !state.showNodeAge
-		saveColumnPreferences(state)
-	case "g":
-		state.showNodeGroup = !state.showNodeGroup
-		saveColumnPreferences(state)
-	case "+", "=":
-		// Increase limits
-		switch state.mode {
-		case ViewNodes:
-			state.nodeLimit = min(state.nodeLimit+10, 1000)
-		case ViewPods:
-			state.podLimit = min(state.podLimit+10, 10000)
-		}
-	case "-", "_":
-		// Decrease limits
-		switch state.mode {
-		case ViewNodes:
-			state.nodeLimit = max(state.nodeLimit-10, 10)
-		case ViewPods:
-			state.podLimit = max(state.podLimit-10, 10)
-		}
-	case "l":
-		// Cycle through preset limits
-		cycleLimits(state)
-	case "c":
-		state.compactMode = !state.compactMode
-	case "s":
-		// Cycle through sort modes
-		state.sortMode = (state.sortMode + 1) % 4
 	case "<Resize>":
 		// Handle terminal resize
 	}
@@ -546,7 +539,6 @@ func handleEnterKey(state *LiveState) {
 	if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
 		state.selectedNamespace = state.namespaceList[state.selectedNamespaceIndex]
 		state.mode = ViewPods
-		state.helpBar.Text = getHelpText(state.mode)
 	}
 }
 
@@ -564,57 +556,9 @@ func handleRightArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
 	}
 }
 
-// cycleLimits cycles through preset limit values.
-func cycleLimits(state *LiveState) {
-	presets := []int{20, 50, 100, 500, 1000}
-	current := state.nodeLimit
-	if state.mode == ViewPods {
-		current = state.podLimit
-	}
-
-	// Find next preset
-	nextIdx := 0
-	for i, p := range presets {
-		if current < p {
-			nextIdx = i
-			break
-		}
-	}
-
-	switch state.mode {
-	case ViewNodes:
-		state.nodeLimit = presets[nextIdx]
-	case ViewPods:
-		state.podLimit = presets[nextIdx]
-	}
-}
-
-// saveColumnPreferences saves column visibility preferences to viper config.
-func saveColumnPreferences(state *LiveState) {
-	viper.Set("show-cloud-provider", state.showCloudInfo)
-	viper.Set("show-node-version", state.showNodeVersion)
-	viper.Set("show-node-age", state.showNodeAge)
-	viper.Set("show-node-group", state.showNodeGroup)
-
-	// Save to config file if configured
-	if viper.ConfigFileUsed() != "" {
-		if err := viper.WriteConfig(); err != nil {
-			log.Debugf("failed to save column preferences: %v", err)
-		}
-	}
-}
-
 // min returns the minimum of two integers.
 func min(a, b int) int {
 	if a < b {
-		return a
-	}
-	return b
-}
-
-// max returns the maximum of two integers.
-func max(a, b int) int {
-	if a > b {
 		return a
 	}
 	return b
@@ -669,9 +613,9 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 
 	// Calculate table height based on compact mode (leave room for summary)
 	summaryHeight := 3
-	tableHeight := termHeight - 6 - summaryHeight
+	tableHeight := termHeight - 4 - summaryHeight // 4 = status bar (1) + borders (3)
 	if state.compactMode {
-		tableHeight = termHeight - 5
+		tableHeight = termHeight - 4
 		summaryHeight = 0
 	}
 
@@ -715,33 +659,60 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	limitInfo := ""
 	switch state.mode {
 	case ViewNodes:
-		limitInfo = fmt.Sprintf(" | Showing: %d/%d nodes", min(state.nodeLimit, state.totalNodes), state.totalNodes)
+		limitInfo = fmt.Sprintf(" | Limits: %d/%d nodes", min(state.nodeLimit, state.totalNodes), state.totalNodes)
 	case ViewPods:
-		limitInfo = fmt.Sprintf(" | Showing: %d/%d pods", min(state.podLimit, state.totalPods), state.totalPods)
+		limitInfo = fmt.Sprintf(" | Limits: %d/%d pods", min(state.podLimit, state.totalPods), state.totalPods)
 	}
-	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s | Refresh: %v | Items: %d%s",
+
+	// Add filter info if active
+	filterInfo := ""
+	if state.filterNodeGroup != "" {
+		filterInfo = fmt.Sprintf(" | Filters: NodeGroup=%s", state.filterNodeGroup)
+	}
+	if state.filterCapacityType != "" {
+		if filterInfo == "" {
+			filterInfo = " | Filters: "
+		} else {
+			filterInfo += ", "
+		}
+		filterInfo += fmt.Sprintf("Capacity=%s", state.filterCapacityType)
+	}
+
+	// Add dirty indicator if modal is open
+	dirtyIndicator := ""
+	if state.modalDirty {
+		dirtyIndicator = " | [⚠ Unsaved Changes](fg:yellow)"
+	}
+
+	sortInfo := fmt.Sprintf(" | Sort: %s", getSortModeString(state.sortMode))
+
+	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s%s%s%s%s | [?]Settings [q]Quit",
 		modeStr,
 		state.lastUpdate.Format("15:04:05"),
-		state.refreshInterval,
-		len(data)/getRowMultiplier(state.showBars),
-		limitInfo)
+		limitInfo,
+		filterInfo,
+		sortInfo,
+		dirtyIndicator)
 	state.statusBar.Border = false
-	state.statusBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+2)
+	state.statusBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+1)
 
-	// Update menu bar with toggles
-	state.menuBar.Text = getMenuBar(state)
-	state.menuBar.SetRect(0, tableHeight+summaryHeight+2, termWidth, tableHeight+summaryHeight+3)
+	// Render base UI
+	ui.Render(state.table, state.statusBar)
 
-	// Update help bar
-	if !state.compactMode {
-		state.helpBar.SetRect(0, tableHeight+summaryHeight+3, termWidth, termHeight)
+	// Render modal overlay if open
+	if state.showSettingsModal {
+		if state.settingsModal == nil || state.modalDirty {
+			state.settingsModal = createSettingsModal(state, termWidth, termHeight)
+		}
+		ui.Render(state.settingsModal)
+
+		// Render confirmation dialog if needed
+		if state.showConfirmDiscard {
+			confirmDialog := createConfirmDialog(termWidth, termHeight)
+			ui.Render(confirmDialog)
+		}
 	}
 
-	if state.compactMode {
-		ui.Render(state.table, state.statusBar, state.menuBar)
-	} else {
-		ui.Render(state.table, state.statusBar, state.menuBar, state.helpBar)
-	}
 	return nil
 }
 
@@ -1931,20 +1902,6 @@ func fetchDeploymentData(
 	return header, rows, metrics, nil
 }
 
-func getHelpText(mode ViewMode) string {
-	base := "[n]NS [p]Pods [o]Nodes [d]Deploy | [b]Bars [%]Pct [r]Raw Data [s]Sort [c]Compact | [q]Quit"
-	if mode == ViewNodes {
-		return base + " | [i]Cloud [v]Version [a]Age [g]NodeGroup [+/-]Limits [l]Presets"
-	}
-	if mode == ViewPods || mode == ViewDeployments {
-		return base + " | [←→]NS [+/-]Limits [l]Presets"
-	}
-	if mode == ViewNamespaces {
-		return base + " | [↑↓]Select [Enter]View"
-	}
-	return base
-}
-
 func getSortModeString(mode SortMode) string {
 	switch mode {
 	case SortByStatus:
@@ -1958,36 +1915,6 @@ func getSortModeString(mode SortMode) string {
 	default:
 		return sortByStatus
 	}
-}
-
-func getMenuBar(state *LiveState) string {
-	barsIcon := checkboxUnchecked
-	if state.showBars {
-		barsIcon = checkboxChecked
-	}
-	percIcon := checkboxUnchecked
-	if state.showPercentages {
-		percIcon = checkboxChecked
-	}
-	rawIcon := checkboxUnchecked
-	if state.showRawResources {
-		rawIcon = checkboxChecked
-	}
-	compactIcon := checkboxUnchecked
-	if state.compactMode {
-		compactIcon = checkboxChecked
-	}
-
-	sortStr := getSortModeString(state.sortMode)
-
-	// Show limit info if applicable
-	limitInfo := ""
-	if state.nodeLimit > 0 && state.totalNodes > state.nodeLimit {
-		limitInfo = fmt.Sprintf(" | Showing %d/%d nodes", state.nodeLimit, state.totalNodes)
-	}
-
-	return fmt.Sprintf(" %s Bars | %s Pct | %s Raw Data | %s Compact | Sort: %s%s",
-		barsIcon, percIcon, rawIcon, compactIcon, sortStr, limitInfo)
 }
 
 func getModeString(mode ViewMode) string {
@@ -2235,4 +2162,403 @@ func getStatusIcon(status string) string {
 	default:
 		return ""
 	}
+}
+
+// initPendingState copies current settings to pending state when modal opens.
+func initPendingState(state *LiveState) {
+	state.pendingShowBars = state.showBars
+	state.pendingShowPercentages = state.showPercentages
+	state.pendingCompactMode = state.compactMode
+	state.pendingShowRawResources = state.showRawResources
+	state.pendingShowCloudInfo = state.showCloudInfo
+	state.pendingShowNodeVersion = state.showNodeVersion
+	state.pendingShowNodeAge = state.showNodeAge
+	state.pendingShowNodeGroup = state.showNodeGroup
+	state.pendingFilterNodeGroup = state.filterNodeGroup
+	state.pendingFilterCapacity = state.filterCapacityType
+	state.pendingSortMode = state.sortMode
+	state.pendingNodeLimit = state.nodeLimit
+	state.pendingPodLimit = state.podLimit
+}
+
+// applyPendingState copies pending settings to current state and saves.
+func applyPendingState(state *LiveState) {
+	state.showBars = state.pendingShowBars
+	state.showPercentages = state.pendingShowPercentages
+	state.compactMode = state.pendingCompactMode
+	state.showRawResources = state.pendingShowRawResources
+	state.showCloudInfo = state.pendingShowCloudInfo
+	state.showNodeVersion = state.pendingShowNodeVersion
+	state.showNodeAge = state.pendingShowNodeAge
+	state.showNodeGroup = state.pendingShowNodeGroup
+	state.filterNodeGroup = state.pendingFilterNodeGroup
+	state.filterCapacityType = state.pendingFilterCapacity
+	state.sortMode = state.pendingSortMode
+	state.nodeLimit = state.pendingNodeLimit
+	state.podLimit = state.pendingPodLimit
+
+	// Save to viper
+	saveAllSettings(state)
+	state.modalDirty = false
+}
+
+// saveAllSettings saves all settings to viper configuration.
+func saveAllSettings(state *LiveState) {
+	viper.Set("show-bars", state.showBars)
+	viper.Set("show-percentages", state.showPercentages)
+	viper.Set("compact-mode", state.compactMode)
+	viper.Set("show-raw-resources", state.showRawResources)
+	viper.Set("show-cloud-provider", state.showCloudInfo)
+	viper.Set("show-node-version", state.showNodeVersion)
+	viper.Set("show-node-age", state.showNodeAge)
+	viper.Set("show-node-group", state.showNodeGroup)
+	viper.Set("filter-node-group", state.filterNodeGroup)
+	viper.Set("filter-capacity-type", state.filterCapacityType)
+	viper.Set("sort-by", getSortModeString(state.sortMode))
+	viper.Set("node-limit", state.nodeLimit)
+	viper.Set("pod-limit", state.podLimit)
+
+	if err := viper.WriteConfig(); err != nil {
+		log.Debugf("Failed to write config: %v", err)
+	}
+}
+
+// updateModalScroll adjusts scroll offset to keep selected row visible.
+func updateModalScroll(state *LiveState, totalRows, visibleRows int) {
+	if state.modalSelectedRow < state.modalScrollOffset {
+		state.modalScrollOffset = state.modalSelectedRow
+	}
+	if state.modalSelectedRow >= state.modalScrollOffset+visibleRows {
+		state.modalScrollOffset = state.modalSelectedRow - visibleRows + 1
+	}
+	if state.modalScrollOffset < 0 {
+		state.modalScrollOffset = 0
+	}
+	if state.modalScrollOffset > totalRows-visibleRows && totalRows > visibleRows {
+		state.modalScrollOffset = totalRows - visibleRows
+	}
+}
+
+// buildSettingsRows creates the table rows for the settings modal.
+func buildSettingsRows(state *LiveState) [][]string {
+	rows := [][]string{
+		{"Category", "Setting", "Key", "Value"},
+		{},
+		{"[Display Options](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Progress Bars", "[b]", boolToCheckbox(state.pendingShowBars)},
+		{"", "Percentages", "[%]", boolToCheckbox(state.pendingShowPercentages)},
+		{"", "Compact Mode", "[c]", boolToCheckbox(state.pendingCompactMode)},
+		{"", "Raw Resources", "[r]", boolToCheckbox(state.pendingShowRawResources)},
+		{},
+		{"[Node Columns](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Cloud Provider Info", "[i]", boolToCheckbox(state.pendingShowCloudInfo)},
+		{"", "Node Version", "[v]", boolToCheckbox(state.pendingShowNodeVersion)},
+		{"", "Node Age", "[a]", boolToCheckbox(state.pendingShowNodeAge)},
+		{"", "Node Group/Pool", "[g]", boolToCheckbox(state.pendingShowNodeGroup)},
+		{},
+		{"[Sorting](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Sort by Status", "", sortModeRadio(state.pendingSortMode, SortByStatus)},
+		{"", "Sort by Name", "", sortModeRadio(state.pendingSortMode, SortByName)},
+		{"", "Sort by CPU", "", sortModeRadio(state.pendingSortMode, SortByCPU)},
+		{"", "Sort by Memory", "", sortModeRadio(state.pendingSortMode, SortByMemory)},
+		{},
+		{"[Limits](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Node Limit", "[←/→]", fmt.Sprintf("%d", state.pendingNodeLimit)},
+		{"", "Pod Limit", "[←/→]", fmt.Sprintf("%d", state.pendingPodLimit)},
+		{},
+		{"[Filters](fg:cyan,mod:bold)", "", "", ""},
+		{"", "Node Group Filter", "[Enter]", filterValue(state.pendingFilterNodeGroup)},
+		{"", "Capacity Type Filter", "[Enter]", filterValue(state.pendingFilterCapacity)},
+	}
+	return rows
+}
+
+// boolToCheckbox converts boolean to checkbox symbol.
+func boolToCheckbox(b bool) string {
+	if b {
+		return checkboxChecked
+	}
+	return checkboxUnchecked
+}
+
+// sortModeRadio returns radio button symbol for sort mode.
+func sortModeRadio(current, target SortMode) string {
+	if current == target {
+		return "●"
+	}
+	return "○"
+}
+
+// filterValue formats filter value for display.
+func filterValue(s string) string {
+	if s == "" {
+		return "[none]"
+	}
+	return fmt.Sprintf("[%s]", s)
+}
+
+// createSettingsModal creates the settings modal table widget.
+func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.Table {
+	table := widgets.NewTable()
+
+	// Styling
+	table.Border = true
+	table.BorderStyle = ui.NewStyle(ui.ColorCyan)
+
+	// Calculate total and visible rows
+	allRows := buildSettingsRows(state)
+	totalRows := len(allRows)
+	visibleRows := termHeight - 10
+	if visibleRows < 15 {
+		visibleRows = 15
+	}
+	if visibleRows > totalRows {
+		visibleRows = totalRows
+	}
+
+	// Update scroll if needed
+	updateModalScroll(state, totalRows, visibleRows)
+
+	// Slice rows for scrolling
+	endRow := state.modalScrollOffset + visibleRows
+	if endRow > totalRows {
+		endRow = totalRows
+	}
+	table.Rows = allRows[state.modalScrollOffset:endRow]
+
+	// Title with scroll position
+	scrollInfo := ""
+	if totalRows > visibleRows {
+		scrollInfo = fmt.Sprintf(" (%d/%d)", state.modalSelectedRow+1, totalRows)
+	}
+	table.Title = fmt.Sprintf(" ⚙️  Settings%s ", scrollInfo)
+	table.TitleStyle = ui.NewStyle(ui.ColorCyan, ui.ColorBlack, ui.ModifierBold)
+
+	// Center the modal
+	modalWidth := 70
+	modalHeight := visibleRows + 2 // +2 for borders
+	modalX := (termWidth - modalWidth) / 2
+	modalY := (termHeight - modalHeight) / 2
+	table.SetRect(modalX, modalY, modalX+modalWidth, modalY+modalHeight)
+
+	// Column widths
+	table.ColumnWidths = []int{20, 25, 10, 15}
+
+	// Style header row
+	table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
+
+	// Highlight selected row (adjust for scroll offset)
+	selectedIdx := state.modalSelectedRow - state.modalScrollOffset + 1
+	if selectedIdx >= 0 && selectedIdx < len(table.Rows) {
+		// Only highlight non-empty, non-category rows
+		row := allRows[state.modalSelectedRow]
+		if len(row) > 1 && row[1] != "" && row[0] == "" {
+			table.RowStyles[selectedIdx] = ui.NewStyle(ui.ColorBlack, ui.ColorCyan, ui.ModifierBold)
+		}
+	}
+
+	table.TextStyle = ui.NewStyle(ui.ColorWhite)
+
+	return table
+}
+
+// createConfirmDialog creates a confirmation dialog for unsaved changes.
+func createConfirmDialog(termWidth, termHeight int) *widgets.Paragraph {
+	dialog := widgets.NewParagraph()
+
+	dialog.Border = true
+	dialog.BorderStyle = ui.NewStyle(ui.ColorYellow)
+	dialog.Title = " ⚠ Confirm "
+	dialog.TitleStyle = ui.NewStyle(ui.ColorYellow, ui.ColorBlack, ui.ModifierBold)
+
+	dialog.Text = "[Discard unsaved changes?](fg:yellow,mod:bold)\n\n" +
+		"[Y] Yes, discard\n" +
+		"[N] No, return to settings"
+
+	// Center the dialog
+	dialogWidth := 50
+	dialogHeight := 7
+	dialogX := (termWidth - dialogWidth) / 2
+	dialogY := (termHeight - dialogHeight) / 2
+	dialog.SetRect(dialogX, dialogY, dialogX+dialogWidth, dialogY+dialogHeight)
+
+	return dialog
+}
+
+// handleModalEvent processes keyboard events when settings modal is open.
+func handleModalEvent(e ui.Event, state *LiveState) bool {
+	_, termHeight := ui.TerminalDimensions()
+	allRows := buildSettingsRows(state)
+	totalRows := len(allRows)
+	visibleRows := termHeight - 10
+	if visibleRows < 15 {
+		visibleRows = 15
+	}
+	if visibleRows > totalRows {
+		visibleRows = totalRows
+	}
+
+	// Find next/previous selectable row
+	findNextSelectableRow := func(current, direction int) int {
+		for i := current + direction; i >= 0 && i < totalRows; i += direction {
+			row := allRows[i]
+			// Selectable if: not empty, has content in column 1, not a category header
+			if len(row) > 1 && row[1] != "" && row[0] == "" {
+				return i
+			}
+		}
+		return current
+	}
+
+	switch e.ID {
+	case "<Escape>", "q", "Q":
+		if state.modalDirty {
+			state.showConfirmDiscard = true
+		} else {
+			state.showSettingsModal = false
+		}
+		return false
+
+	case "s", "S":
+		applyPendingState(state)
+		state.showSettingsModal = false
+		return false
+
+	case "<Up>":
+		state.modalSelectedRow = findNextSelectableRow(state.modalSelectedRow, -1)
+		updateModalScroll(state, totalRows, visibleRows)
+		return false
+
+	case "<Down>":
+		state.modalSelectedRow = findNextSelectableRow(state.modalSelectedRow, 1)
+		updateModalScroll(state, totalRows, visibleRows)
+		return false
+
+	case "<PageUp>":
+		newRow := state.modalSelectedRow - visibleRows
+		if newRow < 0 {
+			newRow = 0
+		}
+		state.modalSelectedRow = findNextSelectableRow(newRow, 1)
+		updateModalScroll(state, totalRows, visibleRows)
+		return false
+
+	case "<PageDown>":
+		newRow := state.modalSelectedRow + visibleRows
+		if newRow >= totalRows {
+			newRow = totalRows - 1
+		}
+		state.modalSelectedRow = findNextSelectableRow(newRow, -1)
+		updateModalScroll(state, totalRows, visibleRows)
+		return false
+
+	case "<Space>", "<Enter>":
+		// Toggle setting at selected row
+		toggleModalSetting(state, allRows[state.modalSelectedRow])
+		return false
+
+	case "<Left>":
+		// Decrease limits
+		adjustModalLimit(state, allRows[state.modalSelectedRow], -10)
+		return false
+
+	case "<Right>":
+		// Increase limits
+		adjustModalLimit(state, allRows[state.modalSelectedRow], 10)
+		return false
+	}
+
+	return false
+}
+
+// toggleModalSetting toggles a setting in the modal based on the selected row.
+func toggleModalSetting(state *LiveState, row []string) {
+	if len(row) < 2 || row[1] == "" {
+		return
+	}
+
+	settingName := row[1]
+	switch settingName {
+	case "Progress Bars":
+		state.pendingShowBars = !state.pendingShowBars
+		state.modalDirty = true
+	case "Percentages":
+		state.pendingShowPercentages = !state.pendingShowPercentages
+		state.modalDirty = true
+	case "Compact Mode":
+		state.pendingCompactMode = !state.pendingCompactMode
+		state.modalDirty = true
+	case "Raw Resources":
+		state.pendingShowRawResources = !state.pendingShowRawResources
+		state.modalDirty = true
+	case "Cloud Provider Info":
+		state.pendingShowCloudInfo = !state.pendingShowCloudInfo
+		state.modalDirty = true
+	case "Node Version":
+		state.pendingShowNodeVersion = !state.pendingShowNodeVersion
+		state.modalDirty = true
+	case "Node Age":
+		state.pendingShowNodeAge = !state.pendingShowNodeAge
+		state.modalDirty = true
+	case "Node Group/Pool":
+		state.pendingShowNodeGroup = !state.pendingShowNodeGroup
+		state.modalDirty = true
+	case "Sort by Status":
+		state.pendingSortMode = SortByStatus
+		state.modalDirty = true
+	case "Sort by Name":
+		state.pendingSortMode = SortByName
+		state.modalDirty = true
+	case "Sort by CPU":
+		state.pendingSortMode = SortByCPU
+		state.modalDirty = true
+	case "Sort by Memory":
+		state.pendingSortMode = SortByMemory
+		state.modalDirty = true
+	}
+}
+
+// adjustModalLimit adjusts node or pod limit in the modal.
+func adjustModalLimit(state *LiveState, row []string, delta int) {
+	if len(row) < 2 {
+		return
+	}
+
+	switch row[1] {
+	case "Node Limit":
+		state.pendingNodeLimit += delta
+		if state.pendingNodeLimit < 10 {
+			state.pendingNodeLimit = 10
+		}
+		if state.pendingNodeLimit > 1000 {
+			state.pendingNodeLimit = 1000
+		}
+		state.modalDirty = true
+	case "Pod Limit":
+		state.pendingPodLimit += delta
+		if state.pendingPodLimit < 10 {
+			state.pendingPodLimit = 10
+		}
+		if state.pendingPodLimit > 10000 {
+			state.pendingPodLimit = 10000
+		}
+		state.modalDirty = true
+	}
+}
+
+// handleConfirmEvent processes keyboard events for the confirmation dialog.
+func handleConfirmEvent(e ui.Event, state *LiveState) bool {
+	switch e.ID {
+	case "y", "Y":
+		// Discard changes and close modal
+		state.showConfirmDiscard = false
+		state.showSettingsModal = false
+		state.modalDirty = false
+		return false
+	case "n", "N", "<Escape>":
+		// Return to modal
+		state.showConfirmDiscard = false
+		return false
+	}
+	return false
 }
