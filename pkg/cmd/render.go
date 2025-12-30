@@ -27,6 +27,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/term"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -125,32 +126,57 @@ func renderPretty(nm *NodeMap, c *Totals) {
 	t.SetOutputMirror(os.Stdout)
 
 	// Configure column colors
-	t.SetColumnConfigs([]pt.ColumnConfig{
+	baseColumns := []pt.ColumnConfig{
 		{Number: 1, AutoMerge: false, Colors: text.Colors{text.FgHiWhite, text.Bold}},
 		{Number: 2, AutoMerge: false},
 		{Number: 3, AutoMerge: false, Colors: text.Colors{text.FgHiCyan}},
 		{Number: 4, AutoMerge: false},
 		{Number: 5, AutoMerge: false},
-	})
+	}
 
-	t.AppendHeader(pt.Row{
+	showCloud := viper.GetBool("show-cloud-provider")
+	if showCloud {
+		baseColumns = append(baseColumns,
+			pt.ColumnConfig{Number: 6, AutoMerge: false},
+			pt.ColumnConfig{Number: 7, AutoMerge: false},
+			pt.ColumnConfig{Number: 8, AutoMerge: false},
+			pt.ColumnConfig{Number: 9, AutoMerge: false},
+		)
+	}
+	t.SetColumnConfigs(baseColumns)
+
+	headerRow := pt.Row{
 		"NODE",
 		"STATUS",
 		"VERSION",
 		"CPU UTILIZATION",
 		"MEMORY UTILIZATION",
-	})
+	}
+	if showCloud {
+		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
+	}
+	t.AppendHeader(headerRow)
 
 	// Add NotReady nodes first (if any) with red highlighting
 	for _, name := range notReadyNodes {
 		v := (*nm)[name]
-		t.AppendRow(pt.Row{
+		row := pt.Row{
 			name,
 			text.Colors{text.FgRed, text.Bold}.Sprint("⊘ " + v.Status),
 			v.NodeInfo.KubeletVersion,
 			buildCPUUtilizationCell(v),
 			buildMemUtilizationCell(v),
-		})
+		}
+		if showCloud {
+			// Parse provider from ProviderID
+			provider := ""
+			if v.ProviderID != "" {
+				cp, _ := glanceutil.ParseProviderID(v.ProviderID)
+				provider = strings.ToUpper(cp)
+			}
+			row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
+		}
+		t.AppendRow(row)
 	}
 
 	// Add separator if we have both types
@@ -161,23 +187,37 @@ func renderPretty(nm *NodeMap, c *Totals) {
 	// Add Ready nodes with green status
 	for _, name := range readyNodes {
 		v := (*nm)[name]
-		t.AppendRow(pt.Row{
+		row := pt.Row{
 			name,
 			text.Colors{text.FgGreen, text.Bold}.Sprint("✓ " + v.Status),
 			v.NodeInfo.KubeletVersion,
 			buildCPUUtilizationCell(v),
 			buildMemUtilizationCell(v),
-		})
+		}
+		if showCloud {
+			// Parse provider from ProviderID
+			provider := ""
+			if v.ProviderID != "" {
+				cp, _ := glanceutil.ParseProviderID(v.ProviderID)
+				provider = strings.ToUpper(cp)
+			}
+			row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
+		}
+		t.AppendRow(row)
 	}
 
 	t.AppendSeparator()
-	t.AppendFooter(pt.Row{
+	footerRow := pt.Row{
 		text.Colors{text.FgHiWhite, text.Bold}.Sprint("CLUSTER TOTALS"),
 		fmt.Sprintf("%d nodes", len(*nm)),
 		"",
 		buildTotalCPUCell(c),
 		buildTotalMemCell(c),
-	})
+	}
+	if showCloud {
+		footerRow = append(footerRow, "", "", "", "")
+	}
+	t.AppendFooter(footerRow)
 
 	fmt.Println()
 	t.Render()
@@ -529,7 +569,7 @@ func table(nm *NodeMap, c *Totals) {
 	t.SetOutputMirror(os.Stdout)
 
 	// Configure column alignment
-	t.SetColumnConfigs([]pt.ColumnConfig{
+	baseColumns := []pt.ColumnConfig{
 		{Number: 1, Align: text.AlignLeft},   // Name
 		{Number: 2, Align: text.AlignCenter}, // Status
 		{Number: 3, Align: text.AlignLeft},   // Version
@@ -541,13 +581,28 @@ func table(nm *NodeMap, c *Totals) {
 		{Number: 9, Align: text.AlignRight},  // Mem Lim
 		{Number: 10, Align: text.AlignRight}, // Mem Use
 		{Number: 11, Align: text.AlignRight}, // Mem %
-	})
+	}
 
-	t.AppendHeader(pt.Row{
+	showCloud := viper.GetBool("show-cloud-provider")
+	if showCloud {
+		baseColumns = append(baseColumns,
+			pt.ColumnConfig{Number: 12, Align: text.AlignLeft}, // Provider
+			pt.ColumnConfig{Number: 13, Align: text.AlignLeft}, // Region
+			pt.ColumnConfig{Number: 14, Align: text.AlignLeft}, // Instance Type
+			pt.ColumnConfig{Number: 15, Align: text.AlignLeft}, // Capacity Type
+		)
+	}
+	t.SetColumnConfigs(baseColumns)
+
+	headerRow := pt.Row{
 		"NODE", "STATUS", "VERSION",
 		"CPU REQ", "CPU LIM", "CPU USE", "CPU %",
 		"MEM REQ", "MEM LIM", "MEM USE", "MEM %",
-	})
+	}
+	if showCloud {
+		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
+	}
+	t.AppendHeader(headerRow)
 
 	// Add node rows
 	for _, name := range nodeNames {
@@ -572,7 +627,7 @@ func table(nm *NodeMap, c *Totals) {
 			status = "Unknown"
 		}
 
-		t.AppendRow(pt.Row{
+		row := pt.Row{
 			name,
 			status,
 			v.NodeInfo.KubeletVersion,
@@ -584,7 +639,19 @@ func table(nm *NodeMap, c *Totals) {
 			formatQuantityValue(v.AllocatedMemoryLimits),
 			formatQuantity(v.UsageMemory),
 			memPct,
-		})
+		}
+
+		if showCloud {
+			// Parse provider from ProviderID
+			provider := ""
+			if v.ProviderID != "" {
+				cp, _ := glanceutil.ParseProviderID(v.ProviderID)
+				provider = strings.ToUpper(cp)
+			}
+			row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
+		}
+
+		t.AppendRow(row)
 	}
 
 	// Add totals footer
