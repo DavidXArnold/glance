@@ -437,7 +437,8 @@ func runLive(
 	state.menuBar = widgets.NewParagraph()
 
 	state.menuBar.Border = false
-	state.menuBar.Text = " Toggle View: [b]Progress [%]Percent [c]Compact [r]Raw [i]Cloud [v]Version [a]Age [g]Group | Sort: [1]Status [2]Name [3]CPU [4]Memory"
+	state.menuBar.Text = " Toggle View: [b]Progress [%]Percent [c]Compact [r]Raw [i]Cloud [v]Version [a]Age [g]Group | " +
+		"Sort: [1]Status [2]Name [3]CPU [4]Memory"
 	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
 
 	// Initial render
@@ -2418,7 +2419,8 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 	if totalRows > visibleRows {
 		scrollInfo = fmt.Sprintf(" (%d/%d)", state.modalSelectedRow+1, totalRows)
 	}
-	table.Title = fmt.Sprintf(" ⚙️  Settings%s - ↑↓ Navigate | Space Select | ←→ Adjust | s Save | Esc Cancel ", scrollInfo)
+	table.Title = fmt.Sprintf(" ⚙️  Settings%s - ↑↓ Navigate | Space Select | ←→ Adjust | s Save | Esc Cancel ",
+		scrollInfo)
 	table.TitleStyle = ui.NewStyle(ui.ColorCyan, ui.ColorBlack, ui.ModifierBold)
 
 	// Center the modal
