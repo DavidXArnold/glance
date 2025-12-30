@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -46,6 +48,11 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+)
+
+const (
+	providerAWS = "aws"
+	providerGCE = "gce"
 )
 
 var (
@@ -75,6 +82,15 @@ func initConfig() {
 	// If a config file is found, read it in (ignore errors - config is optional)
 	_ = viper.ReadInConfig()
 
+	// Set default values for configuration options
+	viper.SetDefault("cloud-cache-ttl", 5*time.Minute)
+	viper.SetDefault("cloud-cache-disk", false)
+	viper.SetDefault("show-node-version", false)
+	viper.SetDefault("show-node-age", false)
+	viper.SetDefault("show-node-group", false)
+	viper.SetDefault("filter-node-group", "")
+	viper.SetDefault("filter-capacity-type", "")
+
 	// Configure logging after config is loaded
 	configureLogging()
 }
@@ -101,7 +117,8 @@ func configureLogging() {
 	log.SetLevel(level)
 
 	// Only create log file if level is debug, info, or trace (not for warn/error/fatal)
-	if level <= log.InfoLevel {
+	// Logrus levels: Panic=0, Fatal=1, Error=2, Warn=3, Info=4, Debug=5, Trace=6
+	if level >= log.InfoLevel {
 		// Determine log directory - prefer ~/.glance/, fall back to /tmp
 		logDir := ""
 		home, err := homedir.Dir()
@@ -128,8 +145,11 @@ func configureLogging() {
 			})
 		}
 	} else {
-		// For warn/error/fatal, discard logs (don't clutter terminal output)
+		// For warn/error/fatal, output to stderr
 		log.SetOutput(os.Stderr)
+		log.SetFormatter(&log.TextFormatter{
+			FullTimestamp: true,
+		})
 	}
 }
 
@@ -348,13 +368,19 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		c.TotalUsageCPU.Add(*nm[nn].UsageCPU)
 		c.TotalUsageMemory.Add(*nm[nn].UsageMemory)
 
-		if viper.GetBool("cloud-info") {
-			getCloudInfo(&nodes.Items[i], nm[nn])
-		}
-
 		if viper.GetBool("pods") {
 			nm[nn].PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector)
 		}
+	}
+
+	// Fetch cloud info asynchronously for all nodes if enabled
+	if viper.GetBool("show-cloud-provider") {
+		var cloudWg sync.WaitGroup
+		for i := range nodes.Items {
+			nn := nodes.Items[i].GetName()
+			getCloudInfo(ctx, &nodes.Items[i], nm[nn], &cloudWg)
+		}
+		cloudWg.Wait()
 	}
 
 	render(&nm, c)
@@ -571,22 +597,52 @@ func getPodMetricsFromMetricsAPI(ctx context.Context, metricsClient metricsclien
 	return metrics, nil
 }
 
-func getCloudInfo(n *v1.Node, ns *NodeStats) {
-	if n.Spec.ProviderID != "" {
-		ns.ProviderID = n.Spec.ProviderID
-		cp, id := glanceutil.ParseProviderID(ns.ProviderID)
-		switch cp {
-		case "aws":
-			ns.CloudInfo.Aws = getAWSNodeInfo(id[1])
-		case "gce":
-			ns.CloudInfo.Gce = getGKENodePool(id[1])
-		case "azure":
-			// Azure support not yet implemented
-		default:
-			log.Warnf("Unknown cloud provider: %v", cp)
-		}
+// nolint:unparam // ctx parameter reserved for future use in cloud provider API calls
+func getCloudInfo(ctx context.Context, n *v1.Node, ns *NodeStats, wg *sync.WaitGroup) {
+	if n.Spec.ProviderID == "" {
+		log.Debugf("unable to get cloud-info for node: %v providerID not set", n.GetName())
+		return
 	}
-	log.Warnf("unable to get cloud-info for node: %v providerID not set", n.GetName())
+
+	ns.ProviderID = n.Spec.ProviderID
+
+	// Get region from node labels (available immediately)
+	if region, ok := n.Labels["topology.kubernetes.io/region"]; ok {
+		ns.Region = region
+	}
+
+	// Parse provider type
+	cp, id := glanceutil.ParseProviderID(ns.ProviderID)
+
+	// Fetch detailed cloud info asynchronously
+	if wg != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch cp {
+			case providerAWS:
+				awsInfo, err := getAWSNodeInfo(id[1])
+				if err == nil && awsInfo != nil {
+					ns.InstanceType = awsInfo.InstanceType
+					ns.NodeGroup = awsInfo.NodeGroup
+					ns.FargateProfile = awsInfo.FargateProfile
+					ns.CapacityType = awsInfo.CapacityType
+				}
+			case providerGCE:
+				gceInfo, err := getGCENodeInfo(id[1])
+				if err == nil && gceInfo != nil {
+					ns.InstanceType = gceInfo.InstanceType
+					ns.NodePool = gceInfo.NodePool
+					ns.CapacityType = gceInfo.CapacityType
+				}
+			case "azure":
+				// Azure support not yet implemented
+				log.Debugf("Azure cloud info not yet implemented")
+			default:
+				log.Debugf("Unknown cloud provider: %v", cp)
+			}
+		}()
+	}
 }
 
 func getNamespace() (ns string) {

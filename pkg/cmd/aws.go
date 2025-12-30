@@ -16,17 +16,31 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	log "github.com/sirupsen/logrus"
 )
 
-func getAWSNodeInfo(id string) *ec2.DescribeInstancesOutput {
+const (
+	capacityTypeSpot = "SPOT"
+)
+
+// AWSNodeMetadata holds AWS-specific node information.
+type AWSNodeMetadata struct {
+	InstanceType   string
+	NodeGroup      string // EKS nodegroup name
+	FargateProfile string // Fargate profile name
+	CapacityType   string // ON_DEMAND, SPOT, FARGATE
+}
+
+func getAWSNodeInfo(id string) (*AWSNodeMetadata, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		log.Fatalf("failed to load aws config: %v", err)
+		return nil, fmt.Errorf("failed to load aws config: %w", err)
 	}
 	svc := ec2.NewFromConfig(cfg)
 	input := &ec2.DescribeInstancesInput{
@@ -36,11 +50,55 @@ func getAWSNodeInfo(id string) *ec2.DescribeInstancesOutput {
 	if err != nil {
 		var ae smithy.APIError
 		if errors.As(err, &ae) {
-			log.Warnf("error occurred describing instance %s: %v", id, ae.ErrorCode())
-			return &ec2.DescribeInstancesOutput{}
+			log.Debugf("error occurred describing instance %s: %v", id, ae.ErrorCode())
+			return nil, err
 		}
-		log.Warnf("error occurred describing instance %s: %v", id, err)
-		return &ec2.DescribeInstancesOutput{}
+		log.Debugf("error occurred describing instance %s: %v", id, err)
+		return nil, err
 	}
-	return result
+
+	if len(result.Reservations) > 0 && len(result.Reservations[0].Instances) > 0 {
+		instance := result.Reservations[0].Instances[0]
+		metadata := &AWSNodeMetadata{
+			InstanceType: string(instance.InstanceType),
+		}
+
+		// Extract node group from tags
+		for _, tag := range instance.Tags {
+			if tag.Key != nil && tag.Value != nil {
+				switch *tag.Key {
+				case "eks:nodegroup-name":
+					metadata.NodeGroup = *tag.Value
+				case "eks:cluster-name":
+					// Store cluster name if needed for context
+				}
+			}
+		}
+
+		// Determine capacity type
+		if instance.InstanceLifecycle == types.InstanceLifecycleTypeSpot {
+			metadata.CapacityType = capacityTypeSpot
+		} else {
+			metadata.CapacityType = "ON_DEMAND"
+		}
+
+		// Check for Fargate (Fargate nodes have specific tags)
+		for _, tag := range instance.Tags {
+			if tag.Key != nil && *tag.Key == "eks:compute-type" {
+				if tag.Value != nil && *tag.Value == "fargate" {
+					metadata.CapacityType = "FARGATE"
+					// Extract Fargate profile
+					for _, fgTag := range instance.Tags {
+						if fgTag.Key != nil && *fgTag.Key == "eks:fargate-profile" && fgTag.Value != nil {
+							metadata.FargateProfile = *fgTag.Value
+						}
+					}
+				}
+			}
+		}
+
+		return metadata, nil
+	}
+
+	return nil, fmt.Errorf("no instance information found")
 }

@@ -15,27 +15,90 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 
-	container "cloud.google.com/go/container/apiv1"
-	containerpb "cloud.google.com/go/container/apiv1/containerpb"
+	compute "cloud.google.com/go/compute/apiv1"
+	computepb "cloud.google.com/go/compute/apiv1/computepb"
 )
 
-func getGKENodePool(nodepool string) (np *containerpb.NodePool) {
+// GCENodeMetadata holds GCP-specific node information.
+type GCENodeMetadata struct {
+	InstanceType string
+	NodePool     string // GKE node pool name
+	CapacityType string // STANDARD, SPOT
+}
+
+func getGCENodeInfo(id string) (*GCENodeMetadata, error) {
+	// Parse the GCE provider ID to get project, zone, instance name
+	// Format: project-id/zone/instance-name
+	parts := strings.Split(id, "/")
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid GCE provider ID format")
+	}
+
+	projectID := parts[0]
+	zone := parts[1]
+	instanceName := parts[2]
+
 	ctx := context.Background()
-	c, err := container.NewClusterManagerClient(ctx)
+	c, err := compute.NewInstancesRESTClient(ctx)
 	if err != nil {
-		log.Warn(err)
-		return nil
+		log.Debugf("failed to create GCE client: %v", err)
+		return nil, err
 	}
-	req := &containerpb.GetNodePoolRequest{
-		Name: nodepool,
+	defer func() {
+		if err := c.Close(); err != nil {
+			log.Debugf("failed to close GCE client: %v", err)
+		}
+	}()
+
+	req := &computepb.GetInstanceRequest{
+		Project:  projectID,
+		Zone:     zone,
+		Instance: instanceName,
 	}
-	resp, err := c.GetNodePool(ctx, req)
+
+	instance, err := c.Get(ctx, req)
 	if err != nil {
-		log.Warnf("unable to retrieve nodepool: %v %v", nodepool, err)
-		return nil
+		log.Debugf("failed to get GCE instance: %v", err)
+		return nil, err
 	}
-	return resp
+
+	metadata := &GCENodeMetadata{
+		CapacityType: "STANDARD", // Default
+	}
+
+	if instance.MachineType != nil {
+		// Extract just the machine type name from the full URL
+		parts := strings.Split(*instance.MachineType, "/")
+		metadata.InstanceType = parts[len(parts)-1]
+	}
+
+	// Extract node pool from metadata/labels
+	if instance.Metadata != nil && instance.Metadata.Items != nil {
+		for _, item := range instance.Metadata.Items {
+			if item.Key != nil && *item.Key == "gke-nodepool" && item.Value != nil {
+				metadata.NodePool = *item.Value
+			}
+		}
+	}
+
+	// Check labels for node pool (alternative location)
+	if metadata.NodePool == "" && instance.Labels != nil {
+		if poolName, ok := instance.Labels["gke-nodepool"]; ok {
+			metadata.NodePool = poolName
+		}
+	}
+
+	// Check for spot instances
+	if instance.Scheduling != nil && instance.Scheduling.ProvisioningModel != nil {
+		if *instance.Scheduling.ProvisioningModel == "SPOT" {
+			metadata.CapacityType = "SPOT"
+		}
+	}
+
+	return metadata, nil
 }
