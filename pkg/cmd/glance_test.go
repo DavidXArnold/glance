@@ -104,8 +104,8 @@ func TestNewGlanceCmdFlags(t *testing.T) {
 		t.Errorf("output flag not found")
 	}
 
-	if cmd.PersistentFlags().Lookup("cloud-info") == nil {
-		t.Errorf("cloud-info flag not found")
+	if cmd.PersistentFlags().Lookup("show-cloud-provider") == nil {
+		t.Errorf("show-cloud-provider flag not found")
 	}
 
 	if cmd.PersistentFlags().Lookup("pods") == nil {

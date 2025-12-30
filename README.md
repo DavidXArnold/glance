@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/glance-logo.png" alt="Glance Logo">
+</p>
+
 # `glance` - kubectl plugin to view cluster resource allocation and usage
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-blue.svg)](https://golang.org)
@@ -10,11 +14,12 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 
 - 📊 **Multiple Output Formats** - Text, Pretty tables, JSON, Dashboard, Pie charts, and more
 - 🔄 **Live Monitoring** - Real-time TUI with auto-refresh for continuous observation
-- 🎯 **Multiple View Modes** - Namespaces, Pods, Nodes, and Deployments
-- 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage
-- ☁️ **Cloud Provider Integration** - Optional AWS and GCP node metadata
+- 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, and Deployments
+- 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage with ratio formatting
+- ☁️ **Cloud Provider Integration** - Enabled by default, displays AWS and GCP node metadata
 - 🔍 **Flexible Filtering** - Label and field selectors for targeted views
-- 📏 **Value Display Options** - Human-readable or exact values
+- 📏 **Value Display Options** - Human-readable ratios or raw Kubernetes resource values
+- 🛠️ **Performance Optimizations** - Parallel API fetching, watch cache, and batch operations for large clusters
 
 
 ## Table of Contents
@@ -175,10 +180,23 @@ Switch between views using keyboard shortcuts:
 
 | Key | View | Description |
 |-----|------|-------------|
-| **n** | Namespaces | Resource requests, limits, and usage per namespace (default) |
+| **o** | Nodes | Node capacity, allocation, and current usage across cluster (**default**) |
+| **n** | Namespaces | Resource requests, limits, and usage per namespace (navigate with ↑↓, Enter to view) |
 | **p** | Pods | Resource requests, limits, and usage per pod with namespace selection |
-| **o** | Nodes | Node capacity, allocation, and current usage across cluster |
 | **d** | Deployments | Deployment resources, replica counts, and availability status |
+
+**Default View:** Nodes view shows cluster-wide node status on startup.
+
+**Namespace Navigation:**
+- In **Namespaces view**: Use ↑↓ arrows to select a namespace, press Enter to view pods in that namespace
+- In **Pods/Deployments views**: Use ←→ arrows to cycle through namespaces
+- Use `--namespace` or `-N` flag to start with a specific namespace
+
+**Sort Modes:** Press `s` to cycle through sort modes:
+- **Status** (default) - Non-running/NotReady items first
+- **Name** - Alphabetical order
+- **CPU** - By CPU usage descending
+- **Memory** - By memory usage descending
 
 #### Keyboard Controls
 
@@ -190,9 +208,12 @@ Switch between views using keyboard shortcuts:
 | `d` | Switch to **Deployments** view |
 | `b` | Toggle **progress bars** on/off |
 | `%` | Toggle **percentages** on progress bars |
-| `c` | Toggle **compact mode** (hide help text) |
-| `←` | Previous namespace (in Pods/Deployments view) |
-| `→` | Next namespace (in Pods/Deployments view) |
+| `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
+| `s` | Cycle **sort mode** (Status → Name → CPU → Memory) |
+| `c` | Toggle **compact mode** (hide summary and help) |
+| `↑↓` | Select namespace (in Namespaces view) |
+| `Enter` | View pods for selected namespace (in Namespaces view) |
+| `←→` | Navigate namespaces (in Pods/Deployments view) |
 | `q` | Quit live view |
 
 #### Display Features
@@ -435,13 +456,16 @@ kubectl glance --selector app=nginx --field-selector status.phase=Running -o pre
 
 ## Cloud Provider Integration
 
-Glance can fetch additional metadata from cloud providers (AWS and GCP) to enrich node information.
+Glance can fetch additional metadata from cloud providers (AWS and GCP) to enrich node information. **Cloud provider integration is enabled by default** in version 0.1.18+.
 
-### Enable Cloud Info
+### Cloud Info Display
 
 ```shell
-kubectl glance -c
-kubectl glance --cloud-info
+# Cloud info is shown by default (no flag needed)
+kubectl glance
+
+# Disable cloud info if not needed
+kubectl glance --show-cloud-provider=false
 ```
 
 **What You Get:**
@@ -460,15 +484,48 @@ Cloud provider credentials must be configured:
 - Application Default Credentials or service account
 - Permissions: `compute.instances.get`
 
+**Behavior:**
+- If no cloud metadata is found, glance automatically disables cloud info fetching to avoid unnecessary API calls
+- Use `--show-cloud-provider=false` or config file to explicitly disable
+
 ### Example with Cloud Info
 
 ```shell
-# View with cloud provider details
-kubectl glance -c -o pretty
+# View with cloud provider details (default behavior)
+kubectl glance -o pretty
 
 # JSON output with cloud metadata
 kubectl glance -c -o json | jq '.nodeMap[].cloudInfo'
 ```
+
+## CLI Flags Reference
+
+### Static View Flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
+| `--show-cloud-provider` | `-c` | `true` | Display cloud provider metadata (AWS/GCP instance types, regions) |
+| `--pods` | `-p` | `false` | Display pod-level resource details in static view |
+| `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
+| `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
+| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
+
+### Live View Flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--refresh` | `-r` | `2` | Refresh interval in seconds |
+| `--namespace` | `-N` | | Initial namespace for pods/deployments view (empty = all namespaces) |
+| `--node-limit` | | `20` | Maximum number of nodes to display (0 = unlimited) |
+| `--pod-limit` | | `100` | Maximum number of pods to display (0 = unlimited) |
+| `--sort-by` | | `status` | Sort mode: `status`, `name`, `cpu`, `memory` |
+| `--max-concurrent` | | `50` | Maximum concurrent API requests for parallel fetching |
+
+**Notes:**
+- `--node-limit` and `--pod-limit` are useful for large clusters (>100 nodes) to improve performance
+- Sort mode can be changed dynamically in live view by pressing `s`
+- Namespace can be changed interactively using Left/Right arrow keys
 
 ## Configuration
 
@@ -498,9 +555,10 @@ Create `~/.glance` for persistent configuration (YAML format):
 ```yaml
 selector: "environment=production"
 output: pretty
-cloud-info: true
+show-cloud-provider: true
 exact: false
 log-level: warn  # trace, debug, info, warn, error, fatal
+namespace: ""    # Initial namespace for live view (empty = all namespaces)
 ```
 
 ### Logging
@@ -607,6 +665,49 @@ rules:
 - apiGroups: ["metrics.k8s.io"]
   resources: ["nodes", "pods"]
   verbs: ["get", "list"]
+```
+
+## Performance and Scaling
+
+Glance is optimized for large Kubernetes clusters with advanced performance features:
+
+### Optimizations
+
+- **Parallel API Fetching** - Uses Go errgroup for concurrent node, pod, and namespace queries
+- **Watch Cache** - Leverages Kubernetes API server's watch cache (`resourceVersion="0"`) to reduce etcd load
+- **Batch Operations** - Single pod list call with in-memory grouping eliminates N+1 query problem
+- **Smart Limits** - Configurable node and pod limits prevent display overload in large clusters
+
+### Performance Characteristics
+
+| Cluster Size | Startup Time | Recommendations |
+|--------------|--------------|-----------------|
+| < 20 nodes | ~1-2 seconds | Default settings work great |
+| 20-100 nodes | ~2-4 seconds | Use default `--node-limit=20` for live view |
+| 100-500 nodes | ~5-10 seconds | Increase `--node-limit` as needed, use `--sort-by` strategically |
+| 500+ nodes | ~10-20 seconds | Consider watch cache mode (future feature), use higher `--max-concurrent` |
+
+### Large Cluster Detection
+
+Glance automatically detects large clusters (>100 nodes) and warns about performance considerations:
+
+```shell
+# For clusters with 100+ nodes, glance shows a warning:
+WARN Large cluster detected (150 nodes). Using --node-limit=20 for performance.
+Consider using --watch mode for real-time updates with lower API load.
+```
+
+### Tuning for Large Clusters
+
+```shell
+# Increase display limits for larger terminals
+kubectl glance live --node-limit=50 --pod-limit=200
+
+# Increase API concurrency for faster fetching
+kubectl glance live --max-concurrent=100
+
+# Sort by specific criteria to focus on problem areas
+kubectl glance live --sort-by=cpu  # Show highest CPU usage first
 ```
 
 ## Development
