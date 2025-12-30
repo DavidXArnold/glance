@@ -418,10 +418,12 @@ func runLive(
 	}
 
 	// Check cluster size and warn for large clusters
+	// Also detect if cloud provider is present
 	ctx := context.Background()
 	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
 		ResourceVersion: "0", // Use watch cache for faster response
 	})
+	hasCloudProvider := false
 	if err == nil {
 		state.totalNodes = len(nodes.Items)
 		if state.totalNodes > largeClusterThreshold {
@@ -429,6 +431,21 @@ func runLive(
 				"Consider using --watch mode for real-time updates with lower API load.",
 				state.totalNodes, nodeLimit)
 		}
+		// Check if any node has a cloud provider ID
+		for _, node := range nodes.Items {
+			if node.Spec.ProviderID != "" {
+				cp, _ := glanceutil.ParseProviderID(node.Spec.ProviderID)
+				if cp == "aws" || cp == "gce" {
+					hasCloudProvider = true
+					break
+				}
+			}
+		}
+	}
+
+	// If no explicit cloud-provider flag and no cloud provider detected, disable cloud info
+	if !viper.IsSet("show-cloud-provider") && !hasCloudProvider {
+		state.showCloudInfo = false
 	}
 
 	// Initialize UI components
@@ -1601,6 +1618,7 @@ func extractNodeGroupFromLabels(labels map[string]string) string {
 }
 
 // extractCapacityTypeFromLabels extracts capacity type from node labels.
+// Returns empty string if no capacity type label is found (not a cloud provider).
 func extractCapacityTypeFromLabels(labels map[string]string) string {
 	// EKS capacity type
 	if ct, ok := labels["eks.amazonaws.com/capacityType"]; ok {
@@ -1615,14 +1633,17 @@ func extractCapacityTypeFromLabels(labels map[string]string) string {
 		if spot == "true" {
 			return capacityTypeSpot
 		}
+		return "ON_DEMAND"
 	}
 	// GKE preemptible (legacy)
 	if pre, ok := labels["cloud.google.com/gke-preemptible"]; ok {
 		if pre == "true" {
 			return capacityTypeSpot
 		}
+		return "ON_DEMAND"
 	}
-	return "ON_DEMAND"
+	// Return empty if no cloud provider capacity labels found
+	return ""
 }
 
 // fetchCloudInfoForNodes fetches cloud provider info for all nodes with caching.
