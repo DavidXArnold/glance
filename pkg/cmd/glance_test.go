@@ -41,7 +41,6 @@ func TestNewGlanceConfig(t *testing.T) {
 		t.Errorf("NewGlanceConfig() restConfig is nil")
 	}
 }
-
 func TestNewGlanceCmdNotNil(t *testing.T) {
 	cmd := NewGlanceCmd()
 
@@ -57,7 +56,6 @@ func TestNewGlanceCmdNotNil(t *testing.T) {
 		t.Errorf("NewGlanceCmd() Long is empty")
 	}
 }
-
 func TestGetNamespace(t *testing.T) {
 	// Skip this test in CI environments where kubeconfig is not available
 	if os.Getenv("CI") != "" || os.Getenv("GITLAB_CI") != "" {
@@ -75,7 +73,6 @@ func TestGetNamespace(t *testing.T) {
 		t.Logf("getNamespace() returned %q", ns)
 	}
 }
-
 func TestGetLabelSelector(t *testing.T) {
 	selector, err := getLabelSelector()
 
@@ -87,7 +84,6 @@ func TestGetLabelSelector(t *testing.T) {
 		t.Errorf("getLabelSelector() returned nil selector")
 	}
 }
-
 func TestNewGlanceCmdFlags(t *testing.T) {
 	cmd := NewGlanceCmd()
 
@@ -107,5 +103,4 @@ func TestNewGlanceCmdFlags(t *testing.T) {
 	if cmd.PersistentFlags().Lookup("show-cloud-provider") == nil {
 		t.Errorf("show-cloud-provider flag not found")
 	}
-
 }
