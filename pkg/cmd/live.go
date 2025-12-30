@@ -435,7 +435,7 @@ func runLive(
 		for _, node := range nodes.Items {
 			if node.Spec.ProviderID != "" {
 				cp, _ := glanceutil.ParseProviderID(node.Spec.ProviderID)
-				if cp == "aws" || cp == "gce" {
+				if cp == providerAWS || cp == providerGCE {
 					hasCloudProvider = true
 					break
 				}

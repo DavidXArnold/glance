@@ -20,21 +20,19 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	log "github.com/sirupsen/logrus"
 )
 
-const (
-	capacityTypeSpot = "SPOT"
-)
+const capacityOnDemand = "ON_DEMAND"
+const capacityTypeSpot = "SPOT"
 
 // AWSNodeMetadata holds AWS-specific node information.
 type AWSNodeMetadata struct {
 	InstanceType   string
 	NodeGroup      string // EKS nodegroup name
-	FargateProfile string // Fargate profile name
 	CapacityType   string // ON_DEMAND, SPOT, FARGATE
+	FargateProfile string // Fargate profile name
 }
 
 func getAWSNodeInfo(id string) (*AWSNodeMetadata, error) {
@@ -75,12 +73,7 @@ func getAWSNodeInfo(id string) (*AWSNodeMetadata, error) {
 			}
 		}
 
-		// Determine capacity type
-		if instance.InstanceLifecycle == types.InstanceLifecycleTypeSpot {
-			metadata.CapacityType = capacityTypeSpot
-		} else {
-			metadata.CapacityType = "ON_DEMAND"
-		}
+		metadata.CapacityType = capacityOnDemand
 
 		// Check for Fargate (Fargate nodes have specific tags)
 		for _, tag := range instance.Tags {

@@ -168,7 +168,7 @@ func NewGlanceConfig() (gc *GlanceConfig, err error) {
 }
 
 // setupGlanceFlags configures persistent flags for the glance command.
-func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *string, cloudInfo, pods *bool) {
+func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *string, cloudInfo *bool) {
 	cmd.PersistentFlags().StringVar(
 		fieldSelector, "field-selector", "",
 		//nolint lll
@@ -182,7 +182,8 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		"Output format. One of: txt|pretty|json|dash|pie|chart")
 	cmd.PersistentFlags().BoolVarP(
 		cloudInfo, "show-cloud-provider", "c", false,
-		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions). Enabled by default if cloud detected.")
+		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions).\n"+
+			"Enabled by default if cloud detected.")
 
 	cobra.OnInitialize(initConfig)
 
@@ -203,7 +204,7 @@ func NewGlanceCmd() *cobra.Command {
 		fieldSelector string
 		output        string
 		cloudInfo     bool
-		pods          bool
+		// pods          bool
 	)
 
 	KubernetesConfigFlags = genericclioptions.NewConfigFlags(false)
@@ -245,7 +246,7 @@ func NewGlanceCmd() *cobra.Command {
 
 	cmd.Version = v.Version
 
-	setupGlanceFlags(cmd, &labelSelector, &fieldSelector, &output, &cloudInfo, &pods)
+	setupGlanceFlags(cmd, &labelSelector, &fieldSelector, &output, &cloudInfo)
 
 	// Add live subcommand
 	cmd.AddCommand(NewLiveCmd(gc))
