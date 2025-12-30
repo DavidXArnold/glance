@@ -468,12 +468,18 @@ func runLive(
 func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) bool {
 	// Handle confirmation dialog first if active
 	if state.showConfirmDiscard {
-		return handleConfirmEvent(e, state)
+		handleConfirmEvent(e, state)
+		// Only re-render modal and confirmation, don't fetch data
+		updateModalDisplay(state)
+		return false
 	}
 
 	// Handle settings modal if active
 	if state.showSettingsModal {
-		return handleModalEvent(e, state)
+		handleModalEvent(e, state)
+		// Only re-render modal, don't fetch data from Kubernetes
+		updateModalDisplay(state)
+		return false
 	}
 
 	// Main UI event handling
@@ -486,6 +492,9 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		state.showSettingsModal = true
 		state.modalSelectedRow = 3 // First selectable row (Progress Bars)
 		state.modalScrollOffset = 0
+		// Render modal immediately without fetching data
+		updateModalDisplay(state)
+		return false
 	case "n":
 		state.mode = ViewNamespaces
 		state.selectedNamespace = ""
@@ -507,7 +516,11 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 	case "<Right>":
 		handleRightArrow(k8sClient, state)
 	case "<Resize>":
-		// Handle terminal resize
+		// Handle terminal resize - update modal if open
+		if state.showSettingsModal {
+			updateModalDisplay(state)
+			return false
+		}
 	}
 
 	if err := updateDisplay(k8sClient, gc, state); err != nil {
@@ -714,6 +727,26 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	}
 
 	return nil
+}
+
+// updateModalDisplay updates only the modal without fetching data from Kubernetes.
+// This is much faster than updateDisplay and should be used when the modal is open.
+func updateModalDisplay(state *LiveState) {
+	if !state.showSettingsModal {
+		return
+	}
+
+	termWidth, termHeight := ui.TerminalDimensions()
+
+	// Recreate modal with updated state
+	state.settingsModal = createSettingsModal(state, termWidth, termHeight)
+	ui.Render(state.settingsModal)
+
+	// Render confirmation dialog if needed
+	if state.showConfirmDiscard {
+		confirmDialog := createConfirmDialog(termWidth, termHeight)
+		ui.Render(confirmDialog)
+	}
 }
 
 // SummaryStats holds aggregate statistics for the summary bar.
@@ -2386,7 +2419,7 @@ func createConfirmDialog(termWidth, termHeight int) *widgets.Paragraph {
 }
 
 // handleModalEvent processes keyboard events when settings modal is open.
-func handleModalEvent(e ui.Event, state *LiveState) bool {
+func handleModalEvent(e ui.Event, state *LiveState) {
 	_, termHeight := ui.TerminalDimensions()
 	allRows := buildSettingsRows(state)
 	totalRows := len(allRows)
@@ -2417,22 +2450,18 @@ func handleModalEvent(e ui.Event, state *LiveState) bool {
 		} else {
 			state.showSettingsModal = false
 		}
-		return false
 
 	case "s", "S":
 		applyPendingState(state)
 		state.showSettingsModal = false
-		return false
 
 	case "<Up>":
 		state.modalSelectedRow = findNextSelectableRow(state.modalSelectedRow, -1)
 		updateModalScroll(state, totalRows, visibleRows)
-		return false
 
 	case "<Down>":
 		state.modalSelectedRow = findNextSelectableRow(state.modalSelectedRow, 1)
 		updateModalScroll(state, totalRows, visibleRows)
-		return false
 
 	case "<PageUp>":
 		newRow := state.modalSelectedRow - visibleRows
@@ -2441,7 +2470,6 @@ func handleModalEvent(e ui.Event, state *LiveState) bool {
 		}
 		state.modalSelectedRow = findNextSelectableRow(newRow, 1)
 		updateModalScroll(state, totalRows, visibleRows)
-		return false
 
 	case "<PageDown>":
 		newRow := state.modalSelectedRow + visibleRows
@@ -2450,25 +2478,19 @@ func handleModalEvent(e ui.Event, state *LiveState) bool {
 		}
 		state.modalSelectedRow = findNextSelectableRow(newRow, -1)
 		updateModalScroll(state, totalRows, visibleRows)
-		return false
 
 	case "<Space>", "<Enter>":
 		// Toggle setting at selected row
 		toggleModalSetting(state, allRows[state.modalSelectedRow])
-		return false
 
 	case "<Left>":
 		// Decrease limits
 		adjustModalLimit(state, allRows[state.modalSelectedRow], -10)
-		return false
 
 	case "<Right>":
 		// Increase limits
 		adjustModalLimit(state, allRows[state.modalSelectedRow], 10)
-		return false
 	}
-
-	return false
 }
 
 // toggleModalSetting toggles a setting in the modal based on the selected row.
@@ -2547,18 +2569,15 @@ func adjustModalLimit(state *LiveState, row []string, delta int) {
 }
 
 // handleConfirmEvent processes keyboard events for the confirmation dialog.
-func handleConfirmEvent(e ui.Event, state *LiveState) bool {
+func handleConfirmEvent(e ui.Event, state *LiveState) {
 	switch e.ID {
 	case "y", "Y":
 		// Discard changes and close modal
 		state.showConfirmDiscard = false
 		state.showSettingsModal = false
 		state.modalDirty = false
-		return false
 	case "n", "N", "<Escape>":
 		// Return to modal
 		state.showConfirmDiscard = false
-		return false
 	}
-	return false
 }
