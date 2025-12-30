@@ -264,67 +264,8 @@ func runLive(
 	for {
 		select {
 		case e := <-uiEvents:
-			switch e.ID {
-			case "q", "<C-c>":
+			if handleUIEvent(e, k8sClient, gc, state) {
 				return nil
-			case "n":
-				state.mode = ViewNamespaces
-				state.selectedNamespace = ""
-				state.selectedNamespaceIndex = 0
-				state.helpBar.Text = getHelpText(state.mode)
-			case "p":
-				state.mode = ViewPods
-				state.helpBar.Text = getHelpText(state.mode)
-			case "o":
-				state.mode = ViewNodes
-				state.helpBar.Text = getHelpText(state.mode)
-			case "d":
-				state.mode = ViewDeployments
-				state.helpBar.Text = getHelpText(state.mode)
-			case "<Up>":
-				if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
-					if state.selectedNamespaceIndex > 0 {
-						state.selectedNamespaceIndex--
-					}
-				}
-			case "<Down>":
-				if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
-					if state.selectedNamespaceIndex < len(state.namespaceList)-1 {
-						state.selectedNamespaceIndex++
-					}
-				}
-			case "<Enter>":
-				if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
-					// Switch to pods view for selected namespace
-					state.selectedNamespace = state.namespaceList[state.selectedNamespaceIndex]
-					state.mode = ViewPods
-					state.helpBar.Text = getHelpText(state.mode)
-				}
-			case "<Left>":
-				if state.mode == ViewPods || state.mode == ViewDeployments {
-					state.selectedNamespace = getPreviousNamespace(k8sClient, state.selectedNamespace)
-				}
-			case "<Right>":
-				if state.mode == ViewPods || state.mode == ViewDeployments {
-					state.selectedNamespace = getNextNamespace(k8sClient, state.selectedNamespace)
-				}
-			case "b":
-				state.showBars = !state.showBars
-			case "%":
-				state.showPercentages = !state.showPercentages
-			case "r":
-				state.showRawResources = !state.showRawResources
-			case "c":
-				state.compactMode = !state.compactMode
-			case "s":
-				// Cycle through sort modes
-				state.sortMode = (state.sortMode + 1) % 4
-			case "<Resize>":
-				// Handle terminal resize
-			}
-
-			if err := updateDisplay(k8sClient, gc, state); err != nil {
-				log.Errorf("Failed to update display: %v", err)
 			}
 
 		case <-ticker.C:
@@ -333,6 +274,97 @@ func runLive(
 				log.Errorf("Failed to update display: %v", err)
 			}
 		}
+	}
+}
+
+// handleUIEvent processes UI events and returns true if the app should exit.
+func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) bool {
+	switch e.ID {
+	case "q", "<C-c>":
+		return true
+	case "n":
+		state.mode = ViewNamespaces
+		state.selectedNamespace = ""
+		state.selectedNamespaceIndex = 0
+		state.helpBar.Text = getHelpText(state.mode)
+	case "p":
+		state.mode = ViewPods
+		state.helpBar.Text = getHelpText(state.mode)
+	case "o":
+		state.mode = ViewNodes
+		state.helpBar.Text = getHelpText(state.mode)
+	case "d":
+		state.mode = ViewDeployments
+		state.helpBar.Text = getHelpText(state.mode)
+	case "<Up>":
+		handleUpArrow(state)
+	case "<Down>":
+		handleDownArrow(state)
+	case "<Enter>":
+		handleEnterKey(state)
+	case "<Left>":
+		handleLeftArrow(k8sClient, state)
+	case "<Right>":
+		handleRightArrow(k8sClient, state)
+	case "b":
+		state.showBars = !state.showBars
+	case "%":
+		state.showPercentages = !state.showPercentages
+	case "r":
+		state.showRawResources = !state.showRawResources
+	case "c":
+		state.compactMode = !state.compactMode
+	case "s":
+		// Cycle through sort modes
+		state.sortMode = (state.sortMode + 1) % 4
+	case "<Resize>":
+		// Handle terminal resize
+	}
+
+	if err := updateDisplay(k8sClient, gc, state); err != nil {
+		log.Errorf("Failed to update display: %v", err)
+	}
+	return false
+}
+
+// handleUpArrow handles up arrow key navigation in namespace view.
+func handleUpArrow(state *LiveState) {
+	if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
+		if state.selectedNamespaceIndex > 0 {
+			state.selectedNamespaceIndex--
+		}
+	}
+}
+
+// handleDownArrow handles down arrow key navigation in namespace view.
+func handleDownArrow(state *LiveState) {
+	if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
+		if state.selectedNamespaceIndex < len(state.namespaceList)-1 {
+			state.selectedNamespaceIndex++
+		}
+	}
+}
+
+// handleEnterKey handles enter key to select namespace and switch to pods view.
+func handleEnterKey(state *LiveState) {
+	if state.mode == ViewNamespaces && len(state.namespaceList) > 0 {
+		state.selectedNamespace = state.namespaceList[state.selectedNamespaceIndex]
+		state.mode = ViewPods
+		state.helpBar.Text = getHelpText(state.mode)
+	}
+}
+
+// handleLeftArrow handles left arrow key to cycle to previous namespace.
+func handleLeftArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
+	if state.mode == ViewPods || state.mode == ViewDeployments {
+		state.selectedNamespace = getPreviousNamespace(k8sClient, state.selectedNamespace)
+	}
+}
+
+// handleRightArrow handles right arrow key to cycle to next namespace.
+func handleRightArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
+	if state.mode == ViewPods || state.mode == ViewDeployments {
+		state.selectedNamespace = getNextNamespace(k8sClient, state.selectedNamespace)
 	}
 }
 
