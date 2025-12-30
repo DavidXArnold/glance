@@ -109,7 +109,8 @@ func configureLogging() {
 	log.SetLevel(level)
 
 	// Only create log file if level is debug, info, or trace (not for warn/error/fatal)
-	if level <= log.InfoLevel {
+	// Logrus levels: Panic=0, Fatal=1, Error=2, Warn=3, Info=4, Debug=5, Trace=6
+	if level >= log.InfoLevel {
 		// Determine log directory - prefer ~/.glance/, fall back to /tmp
 		logDir := ""
 		home, err := homedir.Dir()
@@ -136,8 +137,11 @@ func configureLogging() {
 			})
 		}
 	} else {
-		// For warn/error/fatal, discard logs (don't clutter terminal output)
+		// For warn/error/fatal, output to stderr
 		log.SetOutput(os.Stderr)
+		log.SetFormatter(&log.TextFormatter{
+			FullTimestamp: true,
+		})
 	}
 }
 

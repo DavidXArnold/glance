@@ -1496,6 +1496,26 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 			continue
 		}
 
+		// Prepare instance ID based on provider format
+		// AWS: aws:///zone/i-instanceid -> id = ["", "zone", "i-instanceid"]
+		// GCE: gce://project/zone/instance -> id = ["project", "zone", "instance"]
+		var instanceID string
+		switch cp {
+		case "aws":
+			// For AWS, we need the actual instance ID (i-xxx), which is id[2]
+			if len(id) < 3 {
+				log.Debugf("invalid AWS provider ID format: %s", nodeData[i].providerID)
+				continue
+			}
+			instanceID = id[2]
+		case "gce":
+			// For GCE, we need the full path "project/zone/instance"
+			instanceID = strings.Join(id, "/")
+		default:
+			log.Debugf("unsupported cloud provider: %s", cp)
+			continue
+		}
+
 		cloudWg.Add(1)
 		go func(idx int, provider string, instanceID string, providerID string) {
 			defer cloudWg.Done()
@@ -1514,7 +1534,7 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 				nodeData[idx].instanceType = instanceType
 				mu.Unlock()
 			}
-		}(i, cp, id[1], nodeData[i].providerID)
+		}(i, cp, instanceID, nodeData[i].providerID)
 	}
 	cloudWg.Wait()
 
