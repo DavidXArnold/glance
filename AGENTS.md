@@ -267,4 +267,127 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
 6. Update README.md with new CLI flags and performance notes
 7. Submit Krew plugin PR to kubernetes-sigs/krew-index
 
+---
 
+## Current Session Status (December 29, 2025)
+
+### Completed on `live-enhancements` branch
+- **Live view UX improvements** - comprehensive enhancements to live monitoring interface
+- Changed default view from Namespaces to Pods with "all namespaces" initial state
+- Namespace display in summary bar:
+  - Shows "Namespace: [←→] <name>" or "All Namespaces" in summary bar
+  - Clear visual indicator for namespace cycling availability
+  - Only displayed in Pods and Deployments views
+- Standardized CPU/memory formatting with ratio display:
+  - New format: "10.2 / 17" for CPU cores, "44.7Gi / 66Gi" for memory
+  - Shows "used / total" or "requests / limits" depending on context
+  - Consistent across all views (namespaces, pods, nodes, deployments)
+- Added raw resource toggle (r key):
+  - Toggle between ratio format and raw Kubernetes values
+  - Raw mode shows values like "1500m", "2048Mi"
+  - Global toggle affects all resource displays
+  - State indicated in menu bar with checkbox
+- Expanded header abbreviations:
+  - "CPU REQ" → "CPU REQUESTS/LIMITS" (combined columns)
+  - "MEM REQ" → "MEMORY REQUESTS/LIMITS" (combined columns)
+  - "CPU USAGE" → "CPU USAGE/LIMITS" (shows ratio)
+  - Node view: "CPU ALLOC/CAP", "MEM ALLOC/CAP" (allocated/capacity ratios)
+  - Deployment view: simplified to requests/limits ratios only
+- Renamed `--cloud-info` flag to `--show-cloud-provider`:
+  - Default changed from `false` to `true` (enabled by default)
+  - More descriptive name for the feature
+  - Backwards compatibility alias maintained in viper bindings
+- Added namespace configuration:
+  - `--namespace` / `-N` flag for initial namespace selection
+  - Config file support via viper binding
+  - Empty string means "all namespaces" (default)
+  - kubectl-compatible namespace handling
+- Updated help text and menu bar:
+  - Added [r]Raw toggle to help text
+  - Menu bar shows raw resource toggle state
+  - Help text shows namespace cycling hint ([←→]NS) contextually
+
+### Architecture Notes
+- **`pkg/cmd/live.go`** - major formatting refactor:
+  - `formatResourceRatio(used, total, isMemory, showRaw)` - unified formatting function
+  - `formatMilliCPU()` - changed from %.2f to %.1f precision
+  - `renderSummaryBar()` - now takes mode and selectedNamespace parameters
+  - All fetch functions updated to use ratio formatting
+  - Headers reduced from 8-9 columns to 6-7 by combining related metrics
+- **`pkg/cmd/glance.go`** - flag changes:
+  - Renamed `cloud-info` to `show-cloud-provider` with default true
+  - Added backwards compatibility binding for `cloud-info`
+- **`LiveState` struct** - added `showRawResources bool` field
+
+### Key Files Changed
+#### On `live-enhancements` branch:
+- `pkg/cmd/live.go` - ~200 lines modified (formatting refactor, namespace display, headers)
+- `pkg/cmd/glance.go` - flag renaming and backwards compatibility
+- `README.md` - comprehensive documentation updates:
+  - Added CLI Flags Reference section with all flags documented
+  - Updated Features section with new capabilities
+  - Corrected default view mode to Pods
+  - Added missing `s` and `r` key bindings
+  - Updated Cloud Provider Integration section (default enabled)
+  - Added Performance and Scaling section with tuning guidance
+  - Updated config file example with new options
+  - Expanded view modes documentation with sort modes
+- `AGENTS.md` - session documentation (this file)
+
+### Display Format Changes
+**Before:**
+```
+NAMESPACE  CPU REQ  CPU LIMIT  CPU USAGE  MEM REQ   MEM LIMIT  MEM USAGE  PODS
+default    2.50     4.00       1.80       4096Mi    8192Mi     3200Mi     10
+```
+
+**After:**
+```
+NAMESPACE  CPU REQUESTS/LIMITS  CPU USAGE/LIMITS  MEMORY REQUESTS/LIMITS  MEMORY USAGE/LIMITS  PODS
+default    2.5 / 4.0            1.8 / 4.0         4.0Gi / 8.0Gi           3.1Gi / 8.0Gi        10
+```
+
+**Raw Mode (press 'r'):**
+```
+NAMESPACE  CPU REQUESTS/LIMITS  CPU USAGE/LIMITS  MEMORY REQUESTS/LIMITS  MEMORY USAGE/LIMITS  PODS
+default    2500m / 4000m        1800m / 4000m     4096Mi / 8192Mi         3200Mi / 8192Mi      10
+```
+
+### Testing Notes
+- Build successful with `make build`
+- No compilation errors
+- All formatting functions tested manually
+- Ready for runtime testing with live cluster
+
+### Deferred Features
+- **Async cloud info fetching in live mode** - postponed for future implementation
+  - Current behavior: cloud info used in static view only
+  - Future: fetch cloud metadata async on startup, display in live node view
+  - Implementation requires careful testing to avoid startup delays
+
+### Next Steps
+1. Test live view functionality with a real cluster:
+   - Verify namespace display in summary bar
+   - Test ratio formatting across all views
+   - Confirm raw resource toggle works correctly
+   - Test namespace cycling with [←→] keys
+   - Validate new help text and menu bar
+2. Run full test suite (`make test`)
+3. Run linter (`make lint`)
+4. Commit changes to `live-enhancements` branch
+5. Create MR for review
+6. After merge, bump version to v0.1.18 in `version/version.go`
+7. Tag and release v0.1.18
+8. Update krew plugin manifest (automated by CI)
+
+### Breaking Changes
+- **Default view changed**: Was Namespaces, now Pods
+- **Column format changed**: Separate columns combined into ratio format
+- **Flag renamed**: `--cloud-info` → `--show-cloud-provider` (backwards compatible)
+- **Default behavior changed**: Cloud info now enabled by default
+
+### Migration Guide for Users
+- Users expecting Namespaces view on startup: Press `n` to switch
+- Users with `cloud-info: false` in config: Update to `show-cloud-provider: false`
+- Users scripting against column headers: Update parsers for new ratio format
+- Users preferring old separate columns: Use raw mode with `r` key (shows individual values)

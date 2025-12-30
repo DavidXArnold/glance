@@ -161,8 +161,8 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		output, "output", "o", "pretty",
 		"Output format. One of: txt|pretty|json|dash|pie|chart")
 	cmd.PersistentFlags().BoolVarP(
-		cloudInfo, "cloud-info", "c", false,
-		"-c, --cloud-info  Include node metadata (query from cloud provider). true|false")
+		cloudInfo, "show-cloud-provider", "c", true,
+		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions). Enabled by default.")
 	cmd.PersistentFlags().BoolVarP(
 		pods, "pods", "p", false,
 		"-p, --pods  Display pod resources. true|false")
@@ -177,7 +177,8 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 
 	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
 	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
-	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("cloud-info"))
+	_ = viper.BindPFlag("show-cloud-provider", cmd.PersistentFlags().Lookup("show-cloud-provider"))
+	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("show-cloud-provider")) // Backwards compatibility alias
 	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
 	_ = viper.BindPFlags(cmd.Flags())
 }

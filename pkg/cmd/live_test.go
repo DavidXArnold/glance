@@ -91,13 +91,14 @@ func TestGetModeString(t *testing.T) {
 
 func TestGetHelpText(t *testing.T) {
 	tests := []struct {
-		mode         ViewMode
-		shouldHaveNS bool
+		mode             ViewMode
+		shouldHaveNS     bool
+		shouldHaveUpDown bool
 	}{
-		{ViewNamespaces, false},
-		{ViewPods, true},
-		{ViewNodes, false},
-		{ViewDeployments, true},
+		{ViewNamespaces, false, true}, // Has [↑↓]Select [Enter]View
+		{ViewPods, true, false},       // Has [←→]NS
+		{ViewNodes, false, false},
+		{ViewDeployments, true, false}, // Has [←→]NS
 	}
 
 	for _, tt := range tests {
@@ -111,6 +112,9 @@ func TestGetHelpText(t *testing.T) {
 			if !contains(result, "[%]") {
 				t.Errorf("getHelpText() should contain [%%] for percentages toggle")
 			}
+			if !contains(result, "[r]") {
+				t.Errorf("getHelpText() should contain [r] for raw data toggle")
+			}
 			if !contains(result, "[c]") {
 				t.Errorf("getHelpText() should contain [c] for compact toggle")
 			}
@@ -118,9 +122,19 @@ func TestGetHelpText(t *testing.T) {
 				t.Errorf("getHelpText() should contain [s] for sort toggle")
 			}
 
-			// Check namespace navigation for appropriate modes
+			// Check namespace navigation for pods/deployments (←→)
 			if tt.shouldHaveNS && !contains(result, "NS") {
 				t.Errorf("getHelpText(%v) should contain namespace navigation", tt.mode)
+			}
+
+			// Check namespace selection for namespaces view (↑↓ Enter)
+			if tt.shouldHaveUpDown {
+				if !contains(result, "Select") {
+					t.Errorf("getHelpText(%v) should contain Select for up/down navigation", tt.mode)
+				}
+				if !contains(result, "View") {
+					t.Errorf("getHelpText(%v) should contain View for enter key", tt.mode)
+				}
 			}
 		})
 	}
@@ -134,9 +148,9 @@ func TestFormatMilliCPU(t *testing.T) {
 	}{
 		{"nil", nil, "0"},
 		{"zero", resource.NewMilliQuantity(0, resource.DecimalSI), "0"},
-		{"500m", resource.NewMilliQuantity(500, resource.DecimalSI), "0.50"},
-		{"1000m", resource.NewMilliQuantity(1000, resource.DecimalSI), "1.00"},
-		{"2500m", resource.NewMilliQuantity(2500, resource.DecimalSI), "2.50"},
+		{"500m", resource.NewMilliQuantity(500, resource.DecimalSI), "0.5"},
+		{"1000m", resource.NewMilliQuantity(1000, resource.DecimalSI), "1.0"},
+		{"2500m", resource.NewMilliQuantity(2500, resource.DecimalSI), "2.5"},
 	}
 
 	for _, tt := range tests {
