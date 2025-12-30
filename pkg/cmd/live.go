@@ -437,6 +437,8 @@ func runLive(
 	state.menuBar = widgets.NewParagraph()
 
 	state.menuBar.Border = false
+	state.menuBar.Text = " Toggle View: [b]Progress [%]Percent [c]Compact [r]Raw [i]Cloud [v]Version [a]Age [g]Group | Sort: [1]Status [2]Name [3]CPU [4]Memory"
+	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
 
 	// Initial render
 	if err := updateDisplay(k8sClient, gc, state); err != nil {
@@ -672,11 +674,12 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	// Calculate summary stats
 	summaryStats := calculateSummaryStats(metrics)
 
-	// Calculate table height based on compact mode (leave room for summary)
+	// Calculate table height based on compact mode (leave room for summary and shortcuts)
 	summaryHeight := 3
-	tableHeight := termHeight - 4 - summaryHeight // 4 = status bar (1) + borders (3)
+	shortcutsHeight := 1
+	tableHeight := termHeight - 4 - summaryHeight - shortcutsHeight // 4 = status bar (1) + borders (3)
 	if state.compactMode {
-		tableHeight = termHeight - 4
+		tableHeight = termHeight - 4 - shortcutsHeight
 		summaryHeight = 0
 	}
 
@@ -755,10 +758,13 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		sortInfo,
 		dirtyIndicator)
 	state.statusBar.Border = false
-	state.statusBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+1)
+	state.statusBar.SetRect(0, tableHeight+summaryHeight+1, termWidth, tableHeight+summaryHeight+2)
+
+	// Position and render shortcuts bar
+	state.menuBar.SetRect(0, tableHeight+summaryHeight, termWidth, tableHeight+summaryHeight+1)
 
 	// Render base UI
-	ui.Render(state.table, state.statusBar)
+	ui.Render(state.table, state.menuBar, state.statusBar)
 
 	// Render modal overlay if open
 	if state.showSettingsModal {
@@ -2323,33 +2329,33 @@ func updateModalScroll(state *LiveState, totalRows, visibleRows int) {
 // buildSettingsRows creates the table rows for the settings modal.
 func buildSettingsRows(state *LiveState) [][]string {
 	rows := [][]string{
-		{"Category", "Setting", "Key", "Value"},
+		{"Category", "Setting", "Value"},
 		{},
-		{"[Display Options](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Progress Bars", "b", boolToCheckbox(state.pendingShowBars)},
-		{"", "Percentages", "%", boolToCheckbox(state.pendingShowPercentages)},
-		{"", "Compact Mode", "c", boolToCheckbox(state.pendingCompactMode)},
-		{"", "Raw Resources", "r", boolToCheckbox(state.pendingShowRawResources)},
+		{"[Display Options](fg:cyan,mod:bold)", "", ""},
+		{"", "Progress Bars", boolToCheckbox(state.pendingShowBars)},
+		{"", "Percentages", boolToCheckbox(state.pendingShowPercentages)},
+		{"", "Compact Mode", boolToCheckbox(state.pendingCompactMode)},
+		{"", "Raw Resources", boolToCheckbox(state.pendingShowRawResources)},
 		{},
-		{"[Node Columns](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Cloud Provider Info", "i", boolToCheckbox(state.pendingShowCloudInfo)},
-		{"", "Node Version", "v", boolToCheckbox(state.pendingShowNodeVersion)},
-		{"", "Node Age", "a", boolToCheckbox(state.pendingShowNodeAge)},
-		{"", "Node Group/Pool", "g", boolToCheckbox(state.pendingShowNodeGroup)},
+		{"[Node Columns](fg:cyan,mod:bold)", "", ""},
+		{"", "Cloud Provider Info", boolToCheckbox(state.pendingShowCloudInfo)},
+		{"", "Node Version", boolToCheckbox(state.pendingShowNodeVersion)},
+		{"", "Node Age", boolToCheckbox(state.pendingShowNodeAge)},
+		{"", "Node Group/Pool", boolToCheckbox(state.pendingShowNodeGroup)},
 		{},
-		{"[Sorting](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Sort by Status", "1", sortModeRadio(state.pendingSortMode, SortByStatus)},
-		{"", "Sort by Name", "2", sortModeRadio(state.pendingSortMode, SortByName)},
-		{"", "Sort by CPU", "3", sortModeRadio(state.pendingSortMode, SortByCPU)},
-		{"", "Sort by Memory", "4", sortModeRadio(state.pendingSortMode, SortByMemory)},
+		{"[Sorting](fg:cyan,mod:bold)", "", ""},
+		{"", "Sort by Status", sortModeRadio(state.pendingSortMode, SortByStatus)},
+		{"", "Sort by Name", sortModeRadio(state.pendingSortMode, SortByName)},
+		{"", "Sort by CPU", sortModeRadio(state.pendingSortMode, SortByCPU)},
+		{"", "Sort by Memory", sortModeRadio(state.pendingSortMode, SortByMemory)},
 		{},
-		{"[Limits](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Node Limit (←/→ adjust)", "", fmt.Sprintf("%d", state.pendingNodeLimit)},
-		{"", "Pod Limit (←/→ adjust)", "", fmt.Sprintf("%d", state.pendingPodLimit)},
+		{"[Limits](fg:cyan,mod:bold)", "", ""},
+		{"", "Node Limit (←/→ adjust)", fmt.Sprintf("%d", state.pendingNodeLimit)},
+		{"", "Pod Limit (←/→ adjust)", fmt.Sprintf("%d", state.pendingPodLimit)},
 		{},
-		{"[Filters](fg:cyan,mod:bold)", "", "", ""},
-		{"", "Node Group Filter", "", filterValue(state.pendingFilterNodeGroup)},
-		{"", "Capacity Type Filter", "", filterValue(state.pendingFilterCapacity)},
+		{"[Filters](fg:cyan,mod:bold)", "", ""},
+		{"", "Node Group Filter", filterValue(state.pendingFilterNodeGroup)},
+		{"", "Capacity Type Filter", filterValue(state.pendingFilterCapacity)},
 	}
 	return rows
 }
@@ -2416,14 +2422,14 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 	table.TitleStyle = ui.NewStyle(ui.ColorCyan, ui.ColorBlack, ui.ModifierBold)
 
 	// Center the modal
-	modalWidth := 85
+	modalWidth := 75
 	modalHeight := visibleRows + 2 // +2 for borders
 	modalX := (termWidth - modalWidth) / 2
 	modalY := (termHeight - modalHeight) / 2
 	table.SetRect(modalX, modalY, modalX+modalWidth, modalY+modalHeight)
 
 	// Column widths
-	table.ColumnWidths = []int{20, 30, 8, 12}
+	table.ColumnWidths = []int{20, 35, 15}
 
 	// Style header row
 	table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
