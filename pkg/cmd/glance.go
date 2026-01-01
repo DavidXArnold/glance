@@ -15,7 +15,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,16 +26,13 @@ import (
 
 	"github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
+	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	v "gitlab.com/davidxarnold/glance/version"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/kubectl/pkg/cmd/top"
-	resourcehelper "k8s.io/kubectl/pkg/util/resource"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -271,30 +267,6 @@ func NewGlanceCmd() *cobra.Command {
 // nolint gocyclo
 func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	ctx := context.Background()
-	c := &Totals{
-		TotalAllocatableCPU:          resource.NewMilliQuantity(0, resource.DecimalSI),
-		TotalAllocatableMemory:       resource.NewQuantity(0, resource.BinarySI),
-		TotalCapacityCPU:             resource.NewMilliQuantity(0, resource.DecimalSI),
-		TotalCapacityMemory:          resource.NewQuantity(0, resource.BinarySI),
-		TotalAllocatedCPUrequests:    resource.NewMilliQuantity(0, resource.DecimalSI),
-		TotalAllocatedCPULimits:      resource.NewMilliQuantity(0, resource.DecimalSI),
-		TotalAllocatedMemoryRequests: resource.NewQuantity(0, resource.BinarySI),
-		TotalAllocatedMemoryLimits:   resource.NewQuantity(0, resource.BinarySI),
-		TotalUsageCPU:                resource.NewMilliQuantity(0, resource.DecimalSI),
-		TotalUsageMemory:             resource.NewQuantity(0, resource.BinarySI),
-	}
-
-	nm := make(NodeMap)
-	k8sver, err := k8sClient.Discovery().ServerVersion()
-	if err != nil {
-		log.Fatalf(" %+v ", err.Error())
-	}
-
-	// Set cluster info for display in summary
-	c.ClusterInfo = ClusterInfo{
-		Host:          gc.restConfig.Host,
-		MasterVersion: k8sver.GitVersion,
-	}
 
 	nodes, err := getNodes(ctx, k8sClient)
 	if err != nil {
@@ -303,6 +275,11 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	if len(nodes.Items) == 0 {
 		return fmt.Errorf("no Nodes found")
+	}
+
+	k8sver, err := k8sClient.Discovery().ServerVersion()
+	if err != nil {
+		log.Fatalf(" %+v ", err.Error())
 	}
 
 	// Detect if user explicitly set the flag
@@ -334,6 +311,31 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		return err
 	}
 
+	// Build pod and metrics maps using list+group patterns similar to live mode.
+	podsByNode, err := buildNonTerminatedPodsByNode(ctx, k8sClient)
+	if err != nil {
+		return err
+	}
+
+	nodeMetricsByName, err := buildNodeMetricsByName(ctx, metricsClientset)
+	if err != nil {
+		return err
+	}
+
+	// Compute core snapshot (NodeMap + Totals) using shared aggregation logic.
+	snapshotOpts := core.NodeSnapshotOptions{RequireMetrics: true}
+	nm, totals, err := core.ComputeNodeSnapshot(nodes.Items, podsByNode, nodeMetricsByName, snapshotOpts)
+	if err != nil {
+		return err
+	}
+
+	// Set cluster info for display in summary
+	totals.ClusterInfo = core.ClusterInfo{
+		Host:          gc.restConfig.Host,
+		MasterVersion: k8sver.GitVersion,
+	}
+
+	// If requested, enrich with pod-level details (reusing existing helper).
 	labelSelector := labels.Everything()
 	ls := viper.GetString("selector")
 	fs := viper.GetString("field-selector")
@@ -345,61 +347,12 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		}
 	}
 
-	for i := range nodes.Items {
-		nn := nodes.Items[i].Name
-		// Get node condition for ready status
-		var readyCondition *v1.NodeCondition
-		for j := range nodes.Items[i].Status.Conditions {
-			if nodes.Items[i].Status.Conditions[j].Type == v1.NodeReady {
-				readyCondition = &nodes.Items[i].Status.Conditions[j]
-				break
+	if viper.GetBool("pods") {
+		for _, node := range nodes.Items {
+			podList := &v1.PodList{Items: podsByNode[node.Name]}
+			if existing, ok := nm[node.Name]; ok {
+				existing.PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector)
 			}
-		}
-
-		if readyCondition == nil || readyCondition.Status != v1.ConditionTrue {
-			nm[nn] = &NodeStats{
-				Status: "Not Ready",
-			}
-			continue
-		}
-
-		podList, err := getPods(ctx, k8sClient, nn)
-		if err != nil {
-			log.Fatalf("Error getting Pod list from host: %+v ", err.Error())
-		}
-
-		nm[nn] = describeNodeResource(podList)
-		nm[nn].Status = "Ready"
-
-		if nodes.Items[i].Spec.ProviderID != "" {
-			nm[nn].ProviderID = nodes.Items[i].Spec.ProviderID
-		}
-
-		nm[nn].NodeInfo = nodes.Items[i].Status.NodeInfo
-
-		nm[nn].AllocatableCPU = nodes.Items[i].Status.Allocatable.Cpu()
-		nm[nn].AllocatableMemory = nodes.Items[i].Status.Allocatable.Memory()
-
-		c.TotalAllocatableCPU.Add(*nm[nn].AllocatableCPU)
-		c.TotalAllocatableMemory.Add(*nm[nn].AllocatableMemory)
-		c.TotalAllocatedCPUrequests.Add(nm[nn].AllocatedCPUrequests)
-		c.TotalAllocatedCPULimits.Add(nm[nn].AllocatedCPULimits)
-		c.TotalAllocatedMemoryRequests.Add(nm[nn].AllocatedMemoryRequests)
-		c.TotalAllocatedMemoryLimits.Add(nm[nn].AllocatedMemoryLimits)
-
-		nodeMetrics, _, err := getNodeUtilization(ctx, k8sClient, nn, gc)
-		if err != nil {
-			log.Fatalf("Unable to retrieve Node metrics (metrics-server running?): %v", err)
-		}
-
-		nm[nn].UsageCPU = nodeMetrics[0].Usage.Cpu()
-		nm[nn].UsageMemory = nodeMetrics[0].Usage.Memory()
-
-		c.TotalUsageCPU.Add(*nm[nn].UsageCPU)
-		c.TotalUsageMemory.Add(*nm[nn].UsageMemory)
-
-		if viper.GetBool("pods") {
-			nm[nn].PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector)
 		}
 	}
 
@@ -413,7 +366,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		cloudWg.Wait()
 	}
 
-	render(&nm, c)
+	render(&nm, &totals)
 
 	return nil
 }
@@ -428,61 +381,49 @@ func getNodes(ctx context.Context, clientset *kubernetes.Clientset) (nodes *v1.N
 	return nodes, err
 }
 
-func getPods(ctx context.Context, clientset *kubernetes.Clientset, nodeName string) (pods *v1.PodList, err error) {
-	fieldSelector, err := fields.ParseSelector(
-		"spec.nodeName=" + nodeName + ",status.phase!=" + string(v1.PodSucceeded) + ",status.phase!=" + string(v1.PodFailed))
+// buildNonTerminatedPodsByNode fetches all non-terminated pods once and groups
+// them by node name. This mirrors the live path's list+group pattern and
+// avoids per-node pod list calls.
+func buildNonTerminatedPodsByNode(ctx context.Context, clientset *kubernetes.Clientset) (map[string][]v1.Pod, error) {
+	podsByNode := make(map[string][]v1.Pod)
+
+	podList, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: "status.phase!=Succeeded,status.phase!=Failed",
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	nodeNonTerminatedPodsList, err := clientset.CoreV1().Pods("").List(
-		ctx,
-		metav1.ListOptions{FieldSelector: fieldSelector.String()},
-	)
+	for _, pod := range podList.Items {
+		if pod.Spec.NodeName == "" {
+			continue
+		}
+		podsByNode[pod.Spec.NodeName] = append(podsByNode[pod.Spec.NodeName], pod)
+	}
+
+	return podsByNode, nil
+}
+
+// buildNodeMetricsByName lists node metrics once and returns a map keyed by
+// node name. Callers can decide how strictly to enforce metrics presence.
+func buildNodeMetricsByName(
+	ctx context.Context,
+	metricsClient *metricsclientset.Clientset,
+) (map[string]*metricsV1beta1api.NodeMetrics, error) {
+	metricsList, err := metricsClient.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{
+		ResourceVersion: "0",
+	})
 	if err != nil {
 		return nil, err
 	}
-	return nodeNonTerminatedPodsList, nil
-}
 
-func describeNodeResource(nodeNonTerminatedPodsList *v1.PodList) *NodeStats {
-	reqs, limits := getPodsTotalRequestsAndLimits(nodeNonTerminatedPodsList)
-
-	cpuReqs, cpuLimits, memoryReqs, memoryLimits :=
-		reqs[v1.ResourceCPU], limits[v1.ResourceCPU], reqs[v1.ResourceMemory], limits[v1.ResourceMemory]
-
-	ns := &NodeStats{
-		AllocatedCPUrequests:    cpuReqs,
-		AllocatedCPULimits:      cpuLimits,
-		AllocatedMemoryRequests: memoryReqs,
-		AllocatedMemoryLimits:   memoryLimits,
+	result := make(map[string]*metricsV1beta1api.NodeMetrics, len(metricsList.Items))
+	for i := range metricsList.Items {
+		m := &metricsList.Items[i]
+		result[m.Name] = m
 	}
-	return ns
-}
 
-// Based on: https://github.com/kubernetes/kubernetes/pkg/kubectl/describe/versioned/describe.go#L3223
-func getPodsTotalRequestsAndLimits(podList *v1.PodList) (reqs, limits map[v1.ResourceName]resource.Quantity) {
-	reqs, limits = map[v1.ResourceName]resource.Quantity{}, map[v1.ResourceName]resource.Quantity{}
-	for i := range podList.Items {
-		podReqs, podLimits := resourcehelper.PodRequestsAndLimits(&podList.Items[i])
-		for podReqName, podReqValue := range podReqs {
-			if value, ok := reqs[podReqName]; !ok {
-				reqs[podReqName] = podReqValue.DeepCopy()
-			} else {
-				value.Add(podReqValue)
-				reqs[podReqName] = value
-			}
-		}
-		for podLimitName, podLimitValue := range podLimits {
-			if value, ok := limits[podLimitName]; !ok {
-				limits[podLimitName] = podLimitValue.DeepCopy()
-			} else {
-				value.Add(podLimitValue)
-				limits[podLimitName] = value
-			}
-		}
-	}
-	return
+	return result, nil
 }
 
 func getPodsInfo(
@@ -512,93 +453,6 @@ func getLabelSelector() (labels.Selector, error) {
 		}
 	}
 	return labelSelector, nil
-}
-
-// reimplementation of https://github.com/kubernetes/kubernetes/blob/master/pkg/kubectl/cmd/top/top_node.go#L159
-func getNodeUtilization(ctx context.Context, clientset *kubernetes.Clientset, nodeName string, gc *GlanceConfig) (
-	[]metricsapi.NodeMetrics, map[string]v1.ResourceList, error) {
-	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	labelSelector, err := getLabelSelector()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	apiGroups, err := clientset.Discovery().ServerGroups()
-	if err != nil {
-		return nil, nil, err
-	}
-	metricsAPIAvailable := top.SupportedMetricsAPIVersionAvailable(apiGroups)
-
-	// Note: Heapster is deprecated and removed from Kubernetes
-	// The metrics-server is now the standard metrics provider
-	//nolint staticcheck
-	metrics := &metricsapi.NodeMetricsList{}
-	if metricsAPIAvailable {
-		metrics, err = getNodeMetricsFromMetricsAPI(ctx, metricsClientset, nodeName, labelSelector)
-		if err != nil {
-			return nil, nil, err
-		}
-	} else {
-		// If metrics-server is not available, return error
-		return nil, nil, errors.New("metrics API not available - ensure metrics-server is installed")
-	}
-	if len(metrics.Items) == 0 {
-		return nil, nil, errors.New("metrics not available yet")
-	}
-	var nodes []v1.Node
-	if len(nodeName) > 0 {
-		node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-		if err != nil {
-			return nil, nil, err
-		}
-		nodes = append(nodes, *node)
-	} else {
-		nodeList, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-			LabelSelector: labelSelector.String(),
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		nodes = append(nodes, nodeList.Items...)
-	}
-
-	allocatable := make(map[string]v1.ResourceList)
-
-	for i := range nodes {
-		allocatable[nodes[i].Name] = nodes[i].Status.Allocatable
-	}
-
-	return metrics.Items, allocatable, nil
-}
-
-// nolint interfacer
-func getNodeMetricsFromMetricsAPI(ctx context.Context, metricsClient metricsclientset.Interface, resourceName string, selector labels.Selector) (*metricsapi.NodeMetricsList, error) {
-	var err error
-	versionedMetrics := &metricsV1beta1api.NodeMetricsList{}
-	mc := metricsClient.MetricsV1beta1()
-	nm := mc.NodeMetricses()
-	if resourceName != "" {
-		m, err := nm.Get(ctx, resourceName, metav1.GetOptions{})
-		if err != nil {
-			return nil, err
-		}
-		versionedMetrics.Items = []metricsV1beta1api.NodeMetrics{*m}
-	} else {
-		versionedMetrics, err = nm.List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
-		if err != nil {
-			return nil, err
-		}
-	}
-	metrics := &metricsapi.NodeMetricsList{}
-	err = metricsV1beta1api.Convert_v1beta1_NodeMetricsList_To_metrics_NodeMetricsList(versionedMetrics, metrics, nil)
-	if err != nil {
-		return nil, err
-	}
-	return metrics, nil
 }
 
 // nolint interfacer

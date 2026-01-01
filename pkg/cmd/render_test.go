@@ -250,10 +250,6 @@ func TestNodeStatsCloudInfo(t *testing.T) {
 	stats := &NodeStats{
 		Status:     "Ready",
 		ProviderID: "aws:///us-west-2a/i-1234567890abcdef0",
-		CloudInfo: cloudInfo{
-			Aws: nil,
-			Gce: nil,
-		},
 	}
 
 	if stats.CloudInfo.Aws != nil {
