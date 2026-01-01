@@ -27,6 +27,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/text"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/term"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -96,7 +97,7 @@ func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory bool, sho
 	return formatResourceRatio(&used, &total, isMemory, showRaw)
 }
 
-func render(nm *NodeMap, c *Totals) {
+func render(nm *core.NodeMap, c *core.Totals) {
 	switch viper.GetString("output") {
 	case "json":
 		renderJSON(nm, c)
@@ -116,12 +117,9 @@ func render(nm *NodeMap, c *Totals) {
 	}
 }
 
-func renderJSON(nm *NodeMap, c *Totals) {
-	glance := &Glance{
-		Nodes:  *nm,
-		Totals: *c,
-	}
-	g, err := json.MarshalIndent(glance, "", "\t")
+func renderJSON(nm *core.NodeMap, c *core.Totals) {
+	snapshot := core.NewSnapshot(*nm, *c)
+	g, err := json.MarshalIndent(snapshot, "", "\t")
 	if err != nil {
 		log.Error(err)
 		os.Exit(1)
@@ -130,7 +128,7 @@ func renderJSON(nm *NodeMap, c *Totals) {
 	os.Exit(0)
 }
 
-func renderPretty(nm *NodeMap, c *Totals) {
+func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	// Print cluster summary dashboard
 	printClusterSummary(nm, c)
 
@@ -508,7 +506,7 @@ func buildMiniProgressBar(pct float64, width int) string {
 }
 
 // buildTotalCPUCell creates the totals CPU cell
-func buildTotalCPUCell(c *Totals) string {
+func buildTotalCPUCell(c *core.Totals) string {
 	usagePct := calculatePercentage(c.TotalUsageCPU, c.TotalAllocatableCPU)
 	reqPct := calculatePercentage(c.TotalAllocatedCPUrequests, c.TotalAllocatableCPU)
 
@@ -519,7 +517,7 @@ func buildTotalCPUCell(c *Totals) string {
 }
 
 // buildTotalMemCell creates the totals memory cell
-func buildTotalMemCell(c *Totals) string {
+func buildTotalMemCell(c *core.Totals) string {
 	usagePct := calculatePercentage(c.TotalUsageMemory, c.TotalAllocatableMemory)
 	reqPct := calculatePercentage(c.TotalAllocatedMemoryRequests, c.TotalAllocatableMemory)
 
@@ -571,7 +569,7 @@ func printLegend() {
 	fmt.Println()
 }
 
-func table(nm *NodeMap, c *Totals) {
+func table(nm *core.NodeMap, c *core.Totals) {
 	// Sort nodes by name for consistent output
 	nodeNames := make([]string, 0, len(*nm))
 	for name := range *nm {
@@ -726,13 +724,13 @@ func table(nm *NodeMap, c *Totals) {
 	os.Exit(0)
 }
 
-func chart(_ *NodeMap) {
+func chart(_ *core.NodeMap) {
 	log.Fatalf("Not yet implemented")
 	// TODO: Fix go-echarts compatibility with current version
 	// The BarData and Label types have changed, this needs updating
 }
 
-func dash(nm *NodeMap) {
+func dash(nm *core.NodeMap) {
 	if err := ui.Init(); err != nil {
 		log.Fatalf("failed to initialize termui: %v", err)
 	}
@@ -778,7 +776,7 @@ func dash(nm *NodeMap) {
 	}
 }
 
-func pie(nm *NodeMap) {
+func pie(nm *core.NodeMap) {
 	if err := ui.Init(); err != nil {
 		log.Fatalf("failed to initialize termui: %v", err)
 	}

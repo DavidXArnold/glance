@@ -29,6 +29,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
@@ -1480,14 +1481,15 @@ func fetchNodeMetricsAndPods(
 	return nodeMetrics, allPods, nil
 }
 
-// processNodeRow builds a single node row with metrics.
+// processNodeRow builds a single node row with metrics using aggregated
+// NodeStats produced by core.ComputeNodeSnapshot.
 func processNodeRow(
 	node v1.Node,
-	pods []v1.Pod,
-	metricsMap map[string]*metricsV1beta1api.NodeMetrics,
+	stats *NodeStats,
 	state *LiveState,
 ) ([]string, ResourceMetrics, nodeRowData) {
-	// Get node status
+	// Get node status from conditions (for icons) but rely on aggregated
+	// NodeStats for resource values.
 	isReady := false
 	nodeStatus := "Unknown"
 	for _, condition := range node.Status.Conditions {
@@ -1504,28 +1506,26 @@ func processNodeRow(
 
 	cpuCap := node.Status.Capacity.Cpu()
 	memCap := node.Status.Capacity.Memory()
-	cpuAlloc := resource.NewMilliQuantity(0, resource.DecimalSI)
-	memAlloc := resource.NewQuantity(0, resource.BinarySI)
-	cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
-	memUsage := resource.NewQuantity(0, resource.BinarySI)
 
-	// Calculate allocated resources from pods
-	podCount := len(pods)
-	for _, pod := range pods {
-		for _, container := range pod.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuAlloc.Add(*req)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memAlloc.Add(*req)
-			}
-		}
+	// Allocated resources and usage come from aggregated NodeStats.
+	cpuAlloc := stats.AllocatedCPUrequests
+	memAlloc := stats.AllocatedMemoryRequests
+
+	var cpuUsage resource.Quantity
+	if stats.UsageCPU != nil {
+		cpuUsage = *stats.UsageCPU
+	} else {
+		cpuUsage = *resource.NewMilliQuantity(0, resource.DecimalSI)
 	}
 
-	if nm, ok := metricsMap[node.Name]; ok {
-		cpuUsage.Add(nm.Usage[v1.ResourceCPU])
-		memUsage.Add(nm.Usage[v1.ResourceMemory])
+	var memUsage resource.Quantity
+	if stats.UsageMemory != nil {
+		memUsage = *stats.UsageMemory
+	} else {
+		memUsage = *resource.NewQuantity(0, resource.BinarySI)
 	}
+
+	podCount := stats.PodCount
 
 	cpuUsagePct := float64(0)
 	if cpuCap.MilliValue() > 0 {
@@ -1556,10 +1556,10 @@ func processNodeRow(
 
 	// Add resource columns
 	row = append(row,
-		formatResourceRatio(cpuAlloc, cpuCap, false, state.showRawResources),
-		formatResourceRatio(cpuUsage, cpuCap, false, state.showRawResources),
-		formatResourceRatio(memAlloc, memCap, true, state.showRawResources),
-		formatResourceRatio(memUsage, memCap, true, state.showRawResources),
+		formatResourceRatio(&cpuAlloc, cpuCap, false, state.showRawResources),
+		formatResourceRatio(&cpuUsage, cpuCap, false, state.showRawResources),
+		formatResourceRatio(&memAlloc, memCap, true, state.showRawResources),
+		formatResourceRatio(&memUsage, memCap, true, state.showRawResources),
 		fmt.Sprintf("%d", podCount),
 	)
 
@@ -1824,6 +1824,13 @@ func fetchNodeData(
 		}
 	}
 
+	// Use shared core aggregation to compute NodeStats first.
+	snapshotOpts := core.NodeSnapshotOptions{RequireMetrics: false}
+	nm, _, err := core.ComputeNodeSnapshot(nodes.Items, podsByNode, metricsMap, snapshotOpts)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to compute node snapshot: %w", err)
+	}
+
 	// Process nodes in parallel with semaphore for concurrency limit
 	nodeData := make([]nodeRowData, len(nodes.Items))
 	var mu sync.Mutex
@@ -1837,8 +1844,8 @@ func fetchNodeData(
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
 
-			pods := podsByNode[node.Name]
-			_, _, rowData := processNodeRow(node, pods, metricsMap, state)
+			stats := nm[node.Name]
+			_, _, rowData := processNodeRow(node, stats, state)
 
 			mu.Lock()
 			nodeData[idx] = rowData

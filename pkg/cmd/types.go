@@ -14,92 +14,32 @@ limitations under the License.
 package cmd
 
 import (
-	"time"
-
-	containerpb "cloud.google.com/go/container/apiv1/containerpb"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	core "gitlab.com/davidxarnold/glance/pkg/core"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/rest"
 )
 
 // GlanceConfig contains options and configurations needed by glance.
+//
+// NOTE: Core domain types such as NodeStats, Totals, and Glance have been
+// moved to pkg/core. To preserve compatibility inside this package and for
+// external callers importing pkg/cmd, we re-export them as type aliases
+// below.
 type GlanceConfig struct {
 	configFlags *genericclioptions.ConfigFlags
 	restConfig  *rest.Config
 	genericclioptions.IOStreams
 }
 
-// NodeStats holds relevant node statistics including resource allocation and usage.
-type NodeStats struct {
-	Status                  string              `json:",omitempty"`
-	ProviderID              string              `json:",omitempty"`
-	Region                  string              `json:",omitempty"`
-	InstanceType            string              `json:",omitempty"`
-	NodeGroup               string              `json:",omitempty"` // AWS EKS node group
-	NodePool                string              `json:",omitempty"` // GCP GKE node pool
-	FargateProfile          string              `json:",omitempty"` // AWS Fargate profile
-	CapacityType            string              `json:",omitempty"` // ON_DEMAND, SPOT, etc.
-	NodeInfo                v1.NodeSystemInfo   `json:",omitempty"`
-	CloudInfo               cloudInfo           `json:",omitempty"`
-	AllocatableCPU          *resource.Quantity  `json:",omitempty"`
-	AllocatableMemory       *resource.Quantity  `json:",omitempty"`
-	CapacityCPU             *resource.Quantity  `json:",omitempty"`
-	CapacityMemory          *resource.Quantity  `json:",omitempty"`
-	AllocatedCPUrequests    resource.Quantity   `json:",omitempty"`
-	AllocatedCPULimits      resource.Quantity   `json:",omitempty"`
-	AllocatedMemoryRequests resource.Quantity   `json:",omitempty"`
-	AllocatedMemoryLimits   resource.Quantity   `json:",omitempty"`
-	UsageCPU                *resource.Quantity  `json:",omitempty"`
-	UsageMemory             *resource.Quantity  `json:",omitempty"`
-	PodInfo                 map[string]*PodInfo `json:",omitempty"`
-	CreationTime            time.Time           `json:",omitempty"`
-	PodCount                int                 `json:",omitempty"`
-}
+// Re-export core domain types so existing code referring to cmd.NodeStats,
+// cmd.Totals, etc. continues to compile while the canonical definitions live
+// in pkg/core.
 
-// NodeMap is a map of node names to their statistics.
-type NodeMap map[string]*NodeStats
-
-// PodInfo holds pod-level resource information including QoS and usage.
-type PodInfo struct {
-	Qos         *v1.PodQOSClass    `json:",omitempty"`
-	PodReqs     *v1.ResourceList   `json:",omitempty"`
-	PodLimits   *v1.ResourceList   `json:",omitempty"`
-	UsageCPU    *resource.Quantity `json:",omitempty"`
-	UsageMemory *resource.Quantity `json:",omitempty"`
-}
-
-// cloudInfo holds cloud provider specific information for nodes.
-type cloudInfo struct {
-	Aws   *ec2.DescribeInstancesOutput `json:",omitempty"`
-	Gce   *containerpb.NodePool        `json:",omitempty"`
-	Azure map[string]string            `json:",omitempty"`
-}
-
-// ClusterInfo holds metadata about the cluster.
-type ClusterInfo struct {
-	Host          string `json:",omitempty"`
-	MasterVersion string `json:",omitempty"`
-}
-
-// Totals holds aggregate resource statistics across the entire cluster.
-type Totals struct {
-	ClusterInfo                  ClusterInfo        `json:",omitempty"`
-	TotalAllocatableCPU          *resource.Quantity `json:",omitempty"`
-	TotalAllocatableMemory       *resource.Quantity `json:",omitempty"`
-	TotalCapacityCPU             *resource.Quantity `json:",omitempty"`
-	TotalCapacityMemory          *resource.Quantity `json:",omitempty"`
-	TotalAllocatedCPUrequests    *resource.Quantity `json:",omitempty"`
-	TotalAllocatedCPULimits      *resource.Quantity `json:",omitempty"`
-	TotalAllocatedMemoryRequests *resource.Quantity `json:",omitempty"`
-	TotalAllocatedMemoryLimits   *resource.Quantity `json:",omitempty"`
-	TotalUsageCPU                *resource.Quantity `json:",omitempty"`
-	TotalUsageMemory             *resource.Quantity `json:",omitempty"`
-}
-
-// Glance holds the complete cluster state including per-node statistics and totals.
-type Glance struct {
-	Nodes  NodeMap
-	Totals Totals
-}
+type (
+	NodeStats   = core.NodeStats
+	NodeMap     = core.NodeMap
+	PodInfo     = core.PodInfo
+	ClusterInfo = core.ClusterInfo
+	Totals      = core.Totals
+	Glance      = core.Glance
+)

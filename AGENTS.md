@@ -13,6 +13,18 @@ This document provides context and guidelines for AI assistants working on this 
 
 ## Architecture
 
+High-level layering (current state):
+
+- `pkg/core` – canonical domain types (`NodeStats`, `NodeMap`, `Totals`, `Snapshot`) and shared aggregation logic (`ComputeNodeSnapshot`) used by both static and live paths.
+- `pkg/cmd` – CLI wiring and mode-specific orchestration:
+  - `glance.go` – static `kubectl glance` command, Kubernetes client interactions, and **now delegates node aggregation to `pkg/core`**.
+  - `live.go` – live TUI, which **also calls `pkg/core.ComputeNodeSnapshot` for node-level aggregation**, plus additional view-specific aggregation for namespaces/pods/deployments.
+  - `render.go` – output rendering (text, pretty, JSON, charts) consuming `core.Snapshot`/`core.NodeMap`/`core.Totals`.
+  - `types.go` – compatibility type aliases that re-export `pkg/core` types for callers importing `pkg/cmd`.
+- `pkg/util` – shared helpers.
+
+Legacy structure for context:
+
 ```
 glance/
 ├── cmd/
