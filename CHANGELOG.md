@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-01-03
+
 ### Added
 - Core aggregation layer in `pkg/core` with canonical `NodeStats`, `Totals`, and `Snapshot` types plus `ComputeNodeSnapshot` for shared node/pod/metrics aggregation.
 - Unit tests for core aggregation and cloud caching behavior (`pkg/core/aggregate_nodes_test.go`, `pkg/cloud/cache_test.go`).
