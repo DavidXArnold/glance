@@ -16,7 +16,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 - 🔄 **Live Monitoring** - Real-time TUI with auto-refresh for continuous observation
 - 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, and Deployments
 - 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage with ratio formatting
-- ☁️ **Cloud Provider Integration** - Auto-detects AWS/GCP and displays node metadata if present; columns hidden on bare-metal unless enabled
+- ☁️ **Cloud Provider Integration** - Optional AWS/GCP node metadata columns, enabled explicitly via flags or live view toggles
 - 🔍 **Flexible Filtering** - Label and field selectors for targeted views
 - 📏 **Value Display Options** - Human-readable ratios or raw Kubernetes resource values
 - 🛠️ **Performance Optimizations** - Parallel API fetching, watch cache, and batch operations for large clusters
@@ -126,8 +126,8 @@ kubectl glance
 # Simple text output with ASCII borders
 kubectl glance -o txt
 
-# JSON output for automation
-kubectl glance -o json | jq '.totals.totalUsageCPU'
+# JSON output for automation (Totals.TotalUsageCPU from snapshot)
+kubectl glance -o json | jq '.Totals.TotalUsageCPU'
 
 # Visual dashboard
 kubectl glance -o dash
@@ -139,11 +139,11 @@ kubectl glance -o pie
 #### Static View Options
 
 ```shell
-# Show cloud provider columns (AWS/GCP node details) if detected (default)
+# Default: cloud provider columns are hidden
 kubectl glance
-# Force cloud info columns ON (even on bare-metal)
+# Show cloud provider columns (AWS/GCP node details)
 kubectl glance --show-cloud-provider=true
-# Force cloud info columns OFF (even if detected)
+# Explicitly hide cloud info columns (overriding config)
 kubectl glance --show-cloud-provider=false
 
 # Display pod-level resource details
@@ -195,34 +195,47 @@ Switch between views using keyboard shortcuts:
 - In **Pods/Deployments views**: Use ←→ arrows to cycle through namespaces
 - Use `--namespace` or `-N` flag to start with a specific namespace
 
-**Sort Modes:** Press `s` to cycle through sort modes:
-- **Status** (default) - Non-running/NotReady items first
-- **Name** - Alphabetical order
-- **CPU** - By CPU usage descending
-- **Memory** - By memory usage descending
+**Sort Modes:**
+
+You can configure sort order via both flags and keys:
+
+```shell
+# CLI flag (applies at startup)
+kubectl glance live --sort-by=status   # or: name|cpu|memory
+```
+
+At runtime in live view, use keys `1`–`4` to switch sort mode:
+- `1` – Status
+- `2` – Name
+- `3` – CPU
+- `4` – Memory
 
 #### Keyboard Controls
 
-| Key | Action |
-|-----|--------|
-| `n` | Switch to **Namespaces** view |
-| `p` | Switch to **Pods** view |
-| `o` | Switch to **Nodes** view |
-| `d` | Switch to **Deployments** view |
-| `b` | Toggle **progress bars** on/off |
-| `%` | Toggle **percentages** on progress bars |
-| `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
-| `s` | Cycle **sort mode** (Status → Name → CPU → Memory) |
-| `c` | Toggle **compact mode** (hide summary and help) |
-| `i` | Toggle **cloud info** columns (Provider, Region, Instance Type) |
-| `v` | Toggle **node version** column (Kubelet version) |
-| `a` | Toggle **node age** column (time since creation) |
-| `+/-` | Increase/decrease display **limits** (nodes or pods by 10) |
-| `l` | Cycle through **preset limits** (20/50/100/500/1000) |
-| `↑↓` | Select namespace (in Namespaces view) |
-| `Enter` | View pods for selected namespace (in Namespaces view) |
-| `←→` | Navigate namespaces (in Pods/Deployments view) |
-| `q` | Quit live view |
+|| Key | Action |
+||-----|--------|
+|| `n` | Switch to **Namespaces** view |
+|| `p` | Switch to **Pods** view |
+|| `o` | Switch to **Nodes** view |
+|| `d` | Switch to **Deployments** view |
+|| `b` | Toggle **progress bars** on/off |
+|| `%` | Toggle **percentages** on progress bars |
+|| `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
+|| `c` | Toggle **compact mode** (hide summary and help) |
+|| `w` | Toggle **cloud info** columns (Provider, Region, Instance Type, Capacity) |
+|| `v` | Toggle **node version** column (Kubelet version) |
+|| `a` | Toggle **node age** column (time since creation) |
+|| `g` | Toggle **node group/pool** column |
+|| `1` | Sort by **Status** |
+|| `2` | Sort by **Name** |
+|| `3` | Sort by **CPU** |
+|| `4` | Sort by **Memory** |
+|| `?` | Open **settings modal** for advanced toggles |
+|| `+/-` | Increase/decrease display **limits** (nodes or pods by 10) |
+|| `↑↓` | Select namespace (in Namespaces view) |
+|| `Enter` | View pods for selected namespace (in Namespaces view) |
+|| `←→` | Navigate namespaces (in Pods/Deployments view) |
+|| `q` | Quit live view |
 
 #### Display Features
 
@@ -385,27 +398,32 @@ kubectl glance -o json | jq -r '.totals.totalUsageCPU'
 kubectl glance -o json | jq '.nodeMap'
 ```
 
-**JSON Structure:**
+**JSON Structure (simplified):**
 ```json
 {
-  "nodeMap": {
+  "Nodes": {
     "node-1": {
-      "nodeName": "node-1",
-      "status": "Ready",
-      "allocatableCPU": "4",
-      "allocatableMemory": "8053040Ki",
-      "totalAllocatedCPUrequests": "1.25",
-      "totalAllocatedCPULimits": "2.0",
-      "totalAllocatedMemoryRequests": "396Mi",
-      "totalAllocatedMemoryLimits": "1024Mi",
-      "usageCPU": "0.186",
-      "usageMemory": "1172Mi"
+      "Status": "Ready",
+      "ProviderID": "aws:///us-west-2a/i-1234567890abcdef0",
+      "Region": "us-west-2",
+      "InstanceType": "m5.large",
+      "NodeGroup": "eks-nodegroup-1",
+      "CapacityType": "ON_DEMAND",
+      "AllocatableCPU": "4",
+      "AllocatableMemory": "8053040Ki",
+      "AllocatedCPUrequests": "1.25",
+      "AllocatedCPULimits": "2.0",
+      "AllocatedMemoryRequests": "396Mi",
+      "AllocatedMemoryLimits": "1024Mi",
+      "UsageCPU": "0.186",
+      "UsageMemory": "1172Mi"
     }
   },
-  "totals": {
-    "totalAllocatableCPU": "4",
-    "totalAllocatableMemory": "8053040Ki",
-    ...
+  "Totals": {
+    "TotalAllocatableCPU": "4",
+    "TotalAllocatableMemory": "8053040Ki",
+    "TotalUsageCPU": "0.186",
+    "TotalUsageMemory": "1172Mi"
   }
 }
 ```
@@ -464,22 +482,30 @@ kubectl glance --selector app=nginx --field-selector status.phase=Running -o pre
 
 ## Cloud Provider Integration
 
-Glance can fetch additional metadata from cloud providers (AWS and GCP) to enrich node information. **Cloud provider columns are shown by default only if a supported provider is detected (AWS/GCP)**. On bare-metal or unknown providers, columns are hidden unless the flag is set.
+Glance can fetch additional metadata from cloud providers (AWS and GCP) to enrich node information. **Cloud provider columns are hidden by default** and are shown only when explicitly enabled via flag or configuration.
 
 ### Cloud Info Display
 
 ```shell
-# Cloud info columns are shown by default if AWS/GCP is detected
+# Default: cloud info columns are hidden
 kubectl glance
-# Force cloud info columns ON (even on bare-metal)
+# Show cloud info columns
 kubectl glance --show-cloud-provider=true
-# Force cloud info columns OFF (even if detected)
+# Explicitly hide cloud info columns (overriding config)
 kubectl glance --show-cloud-provider=false
 ```
 
-**What You Get:**
-- **AWS EC2**: Instance type, availability zone, region, instance ID
-- **GCP GCE**: Machine type, zone, project ID, instance ID
+**What You Get (as columns/fields):**
+- **Common** (AWS & GCP):
+  - Provider (AWS/GCE)
+  - Region (from standard topology labels where available)
+  - Instance type (e.g., `m5.large`, `n2-standard-4`)
+  - Capacity type (e.g., `ON_DEMAND`, `SPOT`, `FARGATE`, `STANDARD`)
+- **AWS-specific**:
+  - Node group name (EKS)
+  - Fargate profile (where applicable)
+- **GCP-specific**:
+  - Node pool name (GKE)
 
 ### Requirements
 
@@ -494,8 +520,8 @@ Cloud provider credentials must be configured:
 - Permissions: `compute.instances.get`
 
 **Behavior:**
-- If no supported cloud provider is detected, glance hides cloud columns by default (no API calls made)
-- Use `--show-cloud-provider=true` to force columns on, or `--show-cloud-provider=false` to force off
+- Glance hides cloud columns by default (no cloud API calls made)
+- Use `--show-cloud-provider=true` to show columns, or `--show-cloud-provider=false` to force them off
 
 ### Example with Cloud Info
 
@@ -504,18 +530,19 @@ Cloud provider credentials must be configured:
 kubectl glance -o pretty
 # Force cloud columns ON
 kubectl glance --show-cloud-provider=true -o pretty
-# JSON output always includes cloud fields if present
-kubectl glance -o json | jq '.nodeMap[].cloudInfo'
+# Inspect cloud-related fields from JSON
+kubectl glance -o json \
+  | jq '.Nodes[] | {ProviderID, Region, InstanceType, CapacityType, NodeGroup, NodePool, FargateProfile}'
 ```
 
-## CLI Flags Reference
+### CLI Flags Reference
 
 ### Static View Flags
 
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
-| `--show-cloud-provider` | `-c` | `auto` | Display cloud provider metadata (AWS/GCP instance types, regions) if detected; force on/off with true/false |
+|| Flag | Short | Default | Description |
+||------|-------|---------|-------------|
+|| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
+|| `--show-cloud-provider` | `-c` | `false` | Display cloud provider metadata (AWS/GCP instance types, regions) when set to true; off by default |
 | `--pods` | `-p` | `false` | Display pod-level resource details in static view |
 | `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
 | `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
@@ -534,7 +561,7 @@ kubectl glance -o json | jq '.nodeMap[].cloudInfo'
 
 **Notes:**
 - `--node-limit` and `--pod-limit` are useful for large clusters (>100 nodes) to improve performance
-- Sort mode can be changed dynamically in live view by pressing `s`
+- Sort mode can be changed dynamically in live view using keys `1`–`4`
 - Namespace can be changed interactively using Left/Right arrow keys
 
 ## Configuration
@@ -565,7 +592,9 @@ Create `~/.glance` for persistent configuration (YAML format):
 ```yaml
 selector: "environment=production"
 output: pretty
-show-cloud-provider: auto   # auto (default), true, or false
+# show-cloud-provider defaults to false when omitted
+# set explicitly to true/false to control behavior
+show-cloud-provider: true
 exact: false
 log-level: warn  # trace, debug, info, warn, error, fatal
 namespace: ""    # Initial namespace for live view (empty = all namespaces)
@@ -664,8 +693,9 @@ kubectl glance --exact -o json | jq '{
 ### Cluster Requirements
 
 - **Kubernetes**: 1.12 or higher (tested with 1.31)
-- **Metrics Server**: Required for usage statistics and live view
+- **Metrics Server**: **Required for glance to operate** (all modes)
   - Install: `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`
+  - Or see the Kubernetes [metrics-server project] or your cloud provider's documentation for managed metrics add-ons
 
 ### Client Requirements
 
@@ -764,14 +794,21 @@ make check
 glance/
 ├── cmd/                 # Main application entry point
 ├── pkg/
-│   ├── cmd/            # Command implementations
-│   │   ├── glance.go   # Main command and static view
+│   ├── cmd/            # CLI wiring and views
+│   │   ├── glance.go   # Root command and static view
 │   │   ├── live.go     # Live TUI implementation
 │   │   ├── render.go   # Output formatting
-│   │   ├── types.go    # Data structures
-│   │   ├── aws.go      # AWS integration
-│   │   └── gce.go      # GCP integration
-│   └── util/           # Utility functions
+│   │   └── types.go    # Thin aliases over core domain types
+│   ├── core/           # Core domain types and aggregation (UI-agnostic)
+│   │   ├── types.go    # NodeStats, Totals, Snapshot, etc.
+│   │   └── aggregate_nodes.go  # ComputeNodeSnapshot and helpers
+│   ├── cloud/          # Cloud provider integration + caching
+│   │   ├── aws.go      # AWS metadata provider
+│   │   ├── gce.go      # GCP metadata provider
+│   │   ├── cache.go    # Cloud metadata cache with TTL/disk support
+│   │   ├── provider.go # Provider registry and lookup
+│   │   └── types.go    # Provider-agnostic Metadata type
+│   └── util/           # Utility functions (logging, helpers)
 ├── plugins/krew/       # Krew plugin manifest
 └── version/            # Version information
 ```

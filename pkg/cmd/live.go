@@ -15,10 +15,7 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +26,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gitlab.com/davidxarnold/glance/pkg/cloud"
 	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/sync/errgroup"
@@ -104,151 +102,6 @@ type ResourceMetrics struct {
 	MemCapacity float64
 }
 
-// CloudCacheEntry holds cached cloud provider information with TTL.
-type CloudCacheEntry struct {
-	InstanceType   string
-	NodeGroup      string // EKS node group or GKE node pool
-	FargateProfile string // AWS Fargate profile
-	CapacityType   string // ON_DEMAND, SPOT, FARGATE
-	Timestamp      time.Time
-}
-
-// CloudCache holds the in-memory cloud info cache with TTL.
-type CloudCache struct {
-	mu      sync.RWMutex
-	cache   map[string]*CloudCacheEntry
-	ttl     time.Duration
-	useDisk bool
-}
-
-// NewCloudCache creates a new cloud cache with the specified TTL.
-func NewCloudCache(ttl time.Duration, useDisk bool) *CloudCache {
-	c := &CloudCache{
-		cache:   make(map[string]*CloudCacheEntry),
-		ttl:     ttl,
-		useDisk: useDisk,
-	}
-	if useDisk {
-		c.loadFromDisk()
-	}
-	return c
-}
-
-// CloudMetadata holds cloud provider metadata for a node.
-type CloudMetadata struct {
-	InstanceType   string
-	NodeGroup      string
-	FargateProfile string
-	CapacityType   string
-}
-
-// Get retrieves a cached cloud info entry if it exists and is not expired.
-func (c *CloudCache) Get(providerID string) (*CloudMetadata, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entry, ok := c.cache[providerID]
-	if !ok {
-		return nil, false
-	}
-	if time.Since(entry.Timestamp) > c.ttl {
-		return nil, false
-	}
-	return &CloudMetadata{
-		InstanceType:   entry.InstanceType,
-		NodeGroup:      entry.NodeGroup,
-		FargateProfile: entry.FargateProfile,
-		CapacityType:   entry.CapacityType,
-	}, true
-}
-
-// Set stores a cloud info entry in the cache.
-func (c *CloudCache) Set(providerID string, metadata *CloudMetadata) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cache[providerID] = &CloudCacheEntry{
-		InstanceType:   metadata.InstanceType,
-		NodeGroup:      metadata.NodeGroup,
-		FargateProfile: metadata.FargateProfile,
-		CapacityType:   metadata.CapacityType,
-		Timestamp:      time.Now(),
-	}
-	if c.useDisk {
-		// Save to disk in background
-		go c.saveToDisk()
-	}
-}
-
-// getCachePath returns the path to the disk cache file.
-func (c *CloudCache) getCachePath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Debugf("failed to get home directory: %v", err)
-		return ""
-	}
-	return filepath.Join(homeDir, ".glance", "cloud-cache.json")
-}
-
-// loadFromDisk loads cached cloud info from disk.
-func (c *CloudCache) loadFromDisk() {
-	cachePath := c.getCachePath()
-	if cachePath == "" {
-		return
-	}
-
-	// #nosec G304 - cachePath is computed from user home directory, not user input
-	data, err := os.ReadFile(cachePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Debugf("failed to read cloud cache from disk: %v", err)
-		}
-		return
-	}
-
-	var diskCache map[string]*CloudCacheEntry
-	if err := json.Unmarshal(data, &diskCache); err != nil {
-		log.Debugf("failed to unmarshal cloud cache: %v", err)
-		return
-	}
-
-	// Load entries that haven't expired
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for providerID, entry := range diskCache {
-		if time.Since(entry.Timestamp) <= c.ttl {
-			c.cache[providerID] = entry
-		}
-	}
-	log.Debugf("loaded %d cloud cache entries from disk", len(c.cache))
-}
-
-// saveToDisk saves the current cache to disk.
-func (c *CloudCache) saveToDisk() {
-	cachePath := c.getCachePath()
-	if cachePath == "" {
-		return
-	}
-
-	// Ensure directory exists
-	cacheDir := filepath.Dir(cachePath)
-	if err := os.MkdirAll(cacheDir, 0750); err != nil {
-		log.Debugf("failed to create cache directory: %v", err)
-		return
-	}
-
-	c.mu.RLock()
-	data, err := json.Marshal(c.cache)
-	c.mu.RUnlock()
-
-	if err != nil {
-		log.Debugf("failed to marshal cloud cache: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(cachePath, data, 0600); err != nil {
-		log.Debugf("failed to write cloud cache to disk: %v", err)
-	}
-}
-
 // LiveState holds the state for the live TUI
 type LiveState struct {
 	mode                   ViewMode
@@ -279,7 +132,11 @@ type LiveState struct {
 	// Namespace list for navigation
 	namespaceList []string
 	// Cloud info caching
-	cloudCache *CloudCache
+	cloudCache *cloud.Cache
+	// Derived context/cloud metadata for summary header
+	contextName   string
+	cloudProvider string
+	cloudCluster  string
 	// Settings modal state
 	showSettingsModal  bool
 	settingsModal      *widgets.Table
@@ -404,7 +261,7 @@ func runLive(
 		podLimit:               podLimit,
 		maxConcurrent:          maxConcurrent,
 		sortMode:               sortMode,
-		cloudCache:             NewCloudCache(viper.GetDuration("cloud-cache-ttl"), viper.GetBool("cloud-cache-disk")),
+		cloudCache:             cloud.NewCache(viper.GetDuration("cloud-cache-ttl"), viper.GetBool("cloud-cache-disk")),
 		showCloudInfo:          viper.GetBool("show-cloud-provider"),
 		showNodeVersion:        viper.GetBool("show-node-version"),
 		showNodeAge:            viper.GetBool("show-node-age"),
@@ -438,11 +295,15 @@ func runLive(
 				cp, _ := glanceutil.ParseProviderID(node.Spec.ProviderID)
 				if cp == providerAWS || cp == providerGCE {
 					hasCloudProvider = true
+					state.cloudProvider = strings.ToUpper(cp)
 					break
 				}
 			}
 		}
 	}
+
+	// Derive context/cluster names from kubeconfig for summary display.
+	state.contextName, state.cloudCluster = getContextAndCluster(gc)
 
 	// If no explicit cloud-provider flag and no cloud provider detected, disable cloud info
 	if !viper.IsSet("show-cloud-provider") && !hasCloudProvider {
@@ -738,6 +599,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		renderSummaryBar(
 			summaryStats, termWidth, state.mode, state.selectedNamespace,
 			state.nodeLimit, state.podLimit, state.totalNodes, state.totalPods,
+			state.contextName, state.cloudProvider, state.cloudCluster,
 		)
 	}
 
@@ -885,6 +747,7 @@ func calculateSummaryStats(metrics []ResourceMetrics) SummaryStats {
 func renderSummaryBar(
 	stats SummaryStats, width int, mode ViewMode, selectedNamespace string,
 	nodeLimit, podLimit, totalNodes, totalPods int,
+	contextName, cloudProvider, cloudCluster string,
 ) {
 	summary := widgets.NewParagraph()
 	summary.Border = true
@@ -922,13 +785,28 @@ func renderSummaryBar(
 			min(podLimit, totalPods), totalPods)
 	}
 
+	// Add context and cloud summary (similar to static view headers)
+	contextInfo := ""
+	if contextName != "" {
+		contextInfo = fmt.Sprintf(" │ [Context:](fg:cyan,mod:bold) [%s](fg:white,mod:bold)", contextName)
+	}
+	cloudInfo := ""
+	if cloudProvider != "" {
+		cloudInfo = fmt.Sprintf(" │ [Cloud:](fg:cyan,mod:bold) [%s](fg:white,mod:bold)", cloudProvider)
+		if cloudCluster != "" {
+			cloudInfo += fmt.Sprintf(" │ [Cluster:](fg:cyan,mod:bold) [%s](fg:white)", cloudCluster)
+		}
+	}
+
 	summary.Text = fmt.Sprintf(
-		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s",
+		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s%s%s",
 		healthIcon, warnIcon, critIcon,
 		cpuBar, stats.AvgCPUUsage,
 		memBar, stats.AvgMemUsage,
 		namespaceInfo,
 		viewingInfo,
+		contextInfo,
+		cloudInfo,
 	)
 
 	summary.SetRect(0, 0, width, 3)
@@ -1639,14 +1517,14 @@ func extractCapacityTypeFromLabels(labels map[string]string) string {
 	// GKE spot
 	if spot, ok := labels["cloud.google.com/gke-spot"]; ok {
 		if spot == "true" {
-			return capacityTypeSpot
+			return "SPOT"
 		}
 		return "ON_DEMAND"
 	}
 	// GKE preemptible (legacy)
 	if pre, ok := labels["cloud.google.com/gke-preemptible"]; ok {
 		if pre == "true" {
-			return capacityTypeSpot
+			return "SPOT"
 		}
 		return "ON_DEMAND"
 	}
@@ -1660,7 +1538,8 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 		return
 	}
 
-	var cloudWg sync.WaitGroup
+	ctx := context.Background()
+	var wg sync.WaitGroup
 	var mu sync.Mutex
 
 	for i := range nodeData {
@@ -1669,98 +1548,76 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 		}
 
 		cp, id := glanceutil.ParseProviderID(nodeData[i].providerID)
-		// Skip if id array is too short
-		if len(id) < 2 {
+		if len(id) == 0 {
 			log.Debugf("invalid provider ID format: %s", nodeData[i].providerID)
 			continue
 		}
 
-		// Check cache first
-		if cachedMetadata, ok := state.cloudCache.Get(nodeData[i].providerID); ok {
-			mu.Lock()
-			nodeData[i].instanceType = cachedMetadata.InstanceType
-			// Override with cached cloud info if available (takes precedence over labels)
-			if cachedMetadata.NodeGroup != "" {
-				nodeData[i].nodeGroup = cachedMetadata.NodeGroup
-			}
-			if cachedMetadata.FargateProfile != "" {
-				nodeData[i].fargateProfile = cachedMetadata.FargateProfile
-			}
-			if cachedMetadata.CapacityType != "" {
-				nodeData[i].capacityType = cachedMetadata.CapacityType
-			}
-			mu.Unlock()
-			continue
-		}
-
-		// Prepare instance ID based on provider format
+		// Normalize instance identifier for providers that expect a specific form.
 		// AWS: aws:///zone/i-instanceid -> id = ["", "zone", "i-instanceid"]
 		// GCE: gce://project/zone/instance -> id = ["project", "zone", "instance"]
-		var instanceID string
+		var instanceKey string
 		switch cp {
-		case "aws":
-			// For AWS, we need the actual instance ID (i-xxx), which is id[2]
+		case cloud.ProviderAWS:
 			if len(id) < 3 {
 				log.Debugf("invalid AWS provider ID format: %s", nodeData[i].providerID)
 				continue
 			}
-			instanceID = id[2]
-		case "gce":
-			// For GCE, we need the full path "project/zone/instance"
-			instanceID = strings.Join(id, "/")
+			instanceKey = id[2]
+		case cloud.ProviderGCE:
+			instanceKey = strings.Join(id, "/")
 		default:
 			log.Debugf("unsupported cloud provider: %s", cp)
 			continue
 		}
 
-		cloudWg.Add(1)
-		go func(idx int, provider string, instanceID string, providerID string) {
-			defer cloudWg.Done()
-			var metadata *CloudMetadata
-			var err error
-			switch provider {
-			case "aws":
-				awsMetadata, awsErr := getAWSNodeInfo(instanceID)
-				if awsErr == nil && awsMetadata != nil {
-					metadata = &CloudMetadata{
-						InstanceType:   awsMetadata.InstanceType,
-						NodeGroup:      awsMetadata.NodeGroup,
-						FargateProfile: awsMetadata.FargateProfile,
-						CapacityType:   awsMetadata.CapacityType,
-					}
-				}
-				err = awsErr
-			case "gce":
-				gceMetadata, gceErr := getGCENodeInfo(instanceID)
-				if gceErr == nil && gceMetadata != nil {
-					metadata = &CloudMetadata{
-						InstanceType: gceMetadata.InstanceType,
-						NodeGroup:    gceMetadata.NodePool,
-						CapacityType: gceMetadata.CapacityType,
-					}
-				}
-				err = gceErr
+		providerName := cp
+		cacheKey := nodeData[i].providerID
+
+		wg.Add(1)
+		go func(idx int, providerName, instanceKey, cacheKey string) {
+			defer wg.Done()
+
+			// First, try the cache (GetOrFetch handles both cache and provider).
+			md, err := state.cloudCache.GetOrFetch(ctx, providerName, instanceKey)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"node":         nodeData[idx].row[0],
+					"provider":     providerName,
+					"provider_id":  cacheKey,
+					"instance_key": instanceKey,
+				}).Warnf("failed to fetch cloud metadata: %v", err)
+				return
 			}
-			if err == nil && metadata != nil {
-				// Cache the result
-				state.cloudCache.Set(providerID, metadata)
-				mu.Lock()
-				nodeData[idx].instanceType = metadata.InstanceType
-				// Override with cloud API info if available (more accurate than labels)
-				if metadata.NodeGroup != "" {
-					nodeData[idx].nodeGroup = metadata.NodeGroup
-				}
-				if metadata.FargateProfile != "" {
-					nodeData[idx].fargateProfile = metadata.FargateProfile
-				}
-				if metadata.CapacityType != "" {
-					nodeData[idx].capacityType = metadata.CapacityType
-				}
-				mu.Unlock()
+			if md == nil {
+				log.WithFields(log.Fields{
+					"node":         nodeData[idx].row[0],
+					"provider":     providerName,
+					"provider_id":  cacheKey,
+					"instance_key": instanceKey,
+				}).Debug("no cloud metadata returned for node")
+				return
 			}
-		}(i, cp, instanceID, nodeData[i].providerID)
+
+			// Cache under the full providerID as well to avoid recomputing keys.
+			state.cloudCache.Set(cacheKey, md)
+
+			mu.Lock()
+			defer mu.Unlock()
+			node := &nodeData[idx]
+			node.instanceType = md.InstanceType
+			if md.NodeGroup != "" {
+				node.nodeGroup = md.NodeGroup
+			}
+			if md.FargateProfile != "" {
+				node.fargateProfile = md.FargateProfile
+			}
+			if md.CapacityType != "" {
+				node.capacityType = md.CapacityType
+			}
+		}(i, providerName, instanceKey, cacheKey)
 	}
-	cloudWg.Wait()
+	wg.Wait()
 
 	// Add cloud columns to rows if cloud info is enabled
 	if state.showCloudInfo {
@@ -1796,13 +1653,19 @@ func fetchNodeData(
 
 	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
 	if err != nil {
-		return header, [][]string{}, []ResourceMetrics{}, nil
+		return nil, nil, nil, fmt.Errorf("unable to create metrics client: %w", err)
 	}
 
 	// Fetch all data in parallel
 	nodeMetrics, allPods, err := fetchNodeMetricsAndPods(ctx, k8sClient, metricsClient)
 	if err != nil {
-		log.Debugf("Error fetching metrics or pods: %v", err)
+		if isMetricsServerNotAvailable(err) {
+			msg := "metrics-server (metrics.k8s.io) is required for glance live to operate. " +
+				"Install the Kubernetes metrics-server add-on or your cloud provider's metrics extension."
+			log.Warnf("%s: %v", msg, err)
+			return nil, nil, nil, fmt.Errorf("%s", msg)
+		}
+		return nil, nil, nil, fmt.Errorf("failed to fetch metrics or pods: %w", err)
 	}
 
 	// Build metrics map
@@ -2291,6 +2154,30 @@ func getColorIndicator(percentage float64) string {
 	default:
 		return "🟢"
 	}
+}
+
+// getContextAndCluster derives the current kubeconfig context and cluster name
+// for display in the live summary header.
+func getContextAndCluster(gc *GlanceConfig) (contextName, clusterName string) {
+	if gc == nil || gc.configFlags == nil {
+		return "", ""
+	}
+
+	rawConfig, err := gc.configFlags.ToRawKubeConfigLoader().RawConfig()
+	if err != nil {
+		log.Debugf("Unable to determine kubeconfig context for live summary: %v", err)
+		return "", ""
+	}
+
+	ctxName := rawConfig.CurrentContext
+	if ctxName != "" {
+		contextName = ctxName
+	}
+	if ctx, ok := rawConfig.Contexts[ctxName]; ok && ctx.Cluster != "" {
+		clusterName = ctx.Cluster
+	}
+
+	return contextName, clusterName
 }
 
 // getStatusIcon returns an appropriate status icon for a given status string
