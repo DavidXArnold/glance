@@ -6,8 +6,6 @@ that are independent of any particular CLI or UI.
 package core
 
 import (
-	"fmt"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
@@ -139,7 +137,10 @@ func ComputeNodeSnapshot(
 		totals.TotalAllocatedMemoryRequests.Add(stats.AllocatedMemoryRequests)
 		totals.TotalAllocatedMemoryLimits.Add(stats.AllocatedMemoryLimits)
 
-		// Usage from metrics-server.
+		// Usage from metrics-server. If metrics are missing for a Ready node,
+		// treat usage as unknown (zero) but do not fail the snapshot. This
+		// avoids hard failures during scale up/down when metrics-server has not
+		// yet scraped new nodes.
 		if m := nodeMetrics[name]; m != nil {
 			if cpuQty, ok := m.Usage[v1.ResourceCPU]; ok {
 				q := cpuQty.DeepCopy()
@@ -151,8 +152,6 @@ func ComputeNodeSnapshot(
 				stats.UsageMemory = &q
 				totals.TotalUsageMemory.Add(*stats.UsageMemory)
 			}
-		} else if opts.RequireMetrics {
-			return nil, Totals{}, fmt.Errorf("missing node metrics for %q", name)
 		}
 
 		nm[name] = stats

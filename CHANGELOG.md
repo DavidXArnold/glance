@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-01-03
+
+### Added
+- Core aggregation layer in `pkg/core` with canonical `NodeStats`, `Totals`, and `Snapshot` types plus `ComputeNodeSnapshot` for shared node/pod/metrics aggregation.
+- Unit tests for core aggregation and cloud caching behavior (`pkg/core/aggregate_nodes_test.go`, `pkg/cloud/cache_test.go`).
+- Live view cluster summary now shows kubeconfig context, cloud provider, and cluster name alongside CPU/memory stats.
+- Static and text table views include `glance   context: ...   cloud: ...   cluster: ...` style headers derived from kubeconfig and provider IDs.
+
+### Changed
+- Centralized AWS/GCE cloud metadata fetching behind a shared `cloud` package and `cloud.Cache` used by both static and live paths.
+- Static (`kubectl glance`) and live (`kubectl glance live`) code paths now rely on `core.ComputeNodeSnapshot` instead of duplicating aggregation logic.
+- Improved logging around cloud provider failures with structured fields (node, provider, provider ID, instance key).
+- `--show-cloud-provider` now defaults to **disabled**; cloud columns are shown only when explicitly enabled via flag or config.
+- Updated README to reflect new project structure (`pkg/core`, `pkg/cloud`), live-view key bindings (sort keys 1–4, `w` for cloud info), and current JSON snapshot structure.
+
+### Fixed
+- Staticcheck warning in `pkg/cloud/gce.go` by simplifying the deferred client close handling.
+- Ensured "<cluster>: No Nodes found" is printed to stderr as well as logged, even when `GLANCE_LOG_LEVEL=debug` directs logs to a file.
+- Fixed `--show-cloud-provider=false` not being honored when cloud providers are detected by removing auto-enable behavior.
+
 ## [0.2.1] - 2025-12-30
 
 ### Added
