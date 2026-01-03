@@ -22,10 +22,12 @@ import (
 	"sync"
 	"time"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
+	"gitlab.com/davidxarnold/glance/pkg/cloud"
 	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	v "gitlab.com/davidxarnold/glance/version"
@@ -47,8 +49,9 @@ import (
 )
 
 const (
-	providerAWS = "aws"
-	providerGCE = "gce"
+	providerAWS    = "aws"
+	providerGCE    = "gce"
+	clusterLabel   = "cluster"
 )
 
 var (
@@ -241,11 +244,15 @@ func NewGlanceCmd() *cobra.Command {
 			// create the clientset
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
 			if err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
 				return err
 			}
 
 			err = GlanceK8s(k8sClient, gc)
 			if err != nil {
+				// Ensure user-visible error even when logs are redirected to a file
+				// (e.g., GLANCE_LOG_LEVEL=debug writing to ~/.glance/*-glance.log).
+				fmt.Fprintln(os.Stderr, err.Error())
 				return err
 			}
 			return nil
@@ -274,7 +281,8 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}
 
 	if len(nodes.Items) == 0 {
-		return fmt.Errorf("no Nodes found")
+		clusterName := getClusterName(gc)
+		return fmt.Errorf("%s: No Nodes found", clusterName)
 	}
 
 	k8sver, err := k8sClient.Discovery().ServerVersion()
@@ -282,29 +290,9 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		log.Fatalf(" %+v ", err.Error())
 	}
 
-	// Detect if user explicitly set the flag
-	userSetCloud := false
-	for _, arg := range os.Args {
-		if arg == "--show-cloud-provider" || arg == "-c" || arg == "--no-show-cloud-provider" {
-			userSetCloud = true
-			break
-		}
-	}
-
-	// Detect provider from nodes and set flag if not user-set
-	cloudDetected := false
-	for _, node := range nodes.Items {
-		if node.Spec.ProviderID != "" {
-			cp, _ := glanceutil.ParseProviderID(node.Spec.ProviderID)
-			if cp == providerAWS || cp == providerGCE {
-				cloudDetected = true
-				break
-			}
-		}
-	}
-	if !userSetCloud {
-		viper.Set("show-cloud-provider", cloudDetected)
-	}
+	// Respect the explicit --show-cloud-provider flag or config value as-is.
+	// Default behavior is to keep cloud-provider columns hidden unless enabled
+	// by the user via flags or configuration.
 
 	metricsClientset, err := metricsclientset.NewForConfig(gc.restConfig)
 	if err != nil {
@@ -317,13 +305,20 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		return err
 	}
 
+	// Require metrics-server; fail with a clear message if metrics API is missing.
+	snapshotOpts := core.NodeSnapshotOptions{RequireMetrics: true}
+
 	nodeMetricsByName, err := buildNodeMetricsByName(ctx, metricsClientset)
 	if err != nil {
+		if isMetricsServerNotAvailable(err) {
+			msg := "metrics-server (metrics.k8s.io) is required for glance to operate. Install the Kubernetes metrics-server add-on or your cloud provider's metrics extension."
+			log.Warnf("%s: %v", msg, err)
+			return fmt.Errorf("%s", msg)
+		}
 		return err
 	}
 
 	// Compute core snapshot (NodeMap + Totals) using shared aggregation logic.
-	snapshotOpts := core.NodeSnapshotOptions{RequireMetrics: true}
 	nm, totals, err := core.ComputeNodeSnapshot(nodes.Items, podsByNode, nodeMetricsByName, snapshotOpts)
 	if err != nil {
 		return err
@@ -358,10 +353,11 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	// Fetch cloud info asynchronously for all nodes if enabled
 	if viper.GetBool("show-cloud-provider") {
+		cache := cloud.NewCache(viper.GetDuration("cloud-cache-ttl"), viper.GetBool("cloud-cache-disk"))
 		var cloudWg sync.WaitGroup
 		for i := range nodes.Items {
 			nn := nodes.Items[i].GetName()
-			getCloudInfo(ctx, &nodes.Items[i], nm[nn], &cloudWg)
+			getCloudInfo(ctx, cache, &nodes.Items[i], nm[nn], &cloudWg)
 		}
 		cloudWg.Wait()
 	}
@@ -481,8 +477,7 @@ func getPodMetricsFromMetricsAPI(ctx context.Context, metricsClient metricsclien
 	return metrics, nil
 }
 
-// nolint:unparam // ctx parameter reserved for future use in cloud provider API calls
-func getCloudInfo(ctx context.Context, n *v1.Node, ns *NodeStats, wg *sync.WaitGroup) {
+func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeStats, wg *sync.WaitGroup) {
 	if n.Spec.ProviderID == "" {
 		log.Debugf("unable to get cloud-info for node: %v providerID not set", n.GetName())
 		return
@@ -495,38 +490,74 @@ func getCloudInfo(ctx context.Context, n *v1.Node, ns *NodeStats, wg *sync.WaitG
 		ns.Region = region
 	}
 
-	// Parse provider type
 	cp, id := glanceutil.ParseProviderID(ns.ProviderID)
-
-	// Fetch detailed cloud info asynchronously
-	if wg != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			switch cp {
-			case providerAWS:
-				awsInfo, err := getAWSNodeInfo(id[1])
-				if err == nil && awsInfo != nil {
-					ns.InstanceType = awsInfo.InstanceType
-					ns.NodeGroup = awsInfo.NodeGroup
-					ns.FargateProfile = awsInfo.FargateProfile
-					ns.CapacityType = awsInfo.CapacityType
-				}
-			case providerGCE:
-				gceInfo, err := getGCENodeInfo(id[1])
-				if err == nil && gceInfo != nil {
-					ns.InstanceType = gceInfo.InstanceType
-					ns.NodePool = gceInfo.NodePool
-					ns.CapacityType = gceInfo.CapacityType
-				}
-			case "azure":
-				// Azure support not yet implemented
-				log.Debugf("Azure cloud info not yet implemented")
-			default:
-				log.Debugf("Unknown cloud provider: %v", cp)
-			}
-		}()
+	if len(id) == 0 {
+		log.Debugf("invalid provider ID format: %s", ns.ProviderID)
+		return
 	}
+
+	if wg == nil {
+		return
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		// Normalize instance identifier for providers.
+		var instanceKey string
+		switch cp {
+		case cloud.ProviderAWS:
+			if len(id) < 3 {
+				log.Debugf("invalid AWS provider ID format: %s", ns.ProviderID)
+				return
+			}
+			instanceKey = id[2]
+		case cloud.ProviderGCE:
+			instanceKey = strings.Join(id, "/")
+		default:
+			log.Debugf("Unknown cloud provider: %v", cp)
+			return
+		}
+
+		md, err := cache.GetOrFetch(ctx, cp, instanceKey)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"node":        n.GetName(),
+				"provider":    cp,
+				"provider_id": ns.ProviderID,
+				"instance_key": instanceKey,
+			}).Warnf("failed to fetch cloud metadata: %v", err)
+			return
+		}
+		if md == nil {
+			log.WithFields(log.Fields{
+				"node":        n.GetName(),
+				"provider":    cp,
+				"provider_id": ns.ProviderID,
+				"instance_key": instanceKey,
+			}).Debug("no cloud metadata returned for node")
+			return
+		}
+
+		// Also cache under the full providerID to align with live path behaviour.
+		cache.Set(ns.ProviderID, md)
+
+		// Map provider-agnostic metadata onto NodeStats.
+		ns.InstanceType = md.InstanceType
+		if md.NodeGroup != "" {
+			ns.NodeGroup = md.NodeGroup
+		}
+		if md.NodePool != "" {
+			ns.NodePool = md.NodePool
+		}
+		if md.FargateProfile != "" {
+			ns.FargateProfile = md.FargateProfile
+		}
+		if md.CapacityType != "" {
+			ns.CapacityType = md.CapacityType
+		}
+	}()
 }
 
 func getNamespace() (ns string) {
@@ -544,4 +575,48 @@ func getNamespace() (ns string) {
 		return ns
 	}
 	return
+}
+
+// getClusterName returns a human-friendly cluster name for use in messages.
+// It prefers the kubeconfig current context's cluster name, falling back to
+// the context name, and finally a generic "cluster" label if unavailable.
+func getClusterName(gc *GlanceConfig) string {
+	if gc == nil || gc.configFlags == nil {
+		return clusterLabel
+	}
+
+	rawConfig, err := gc.configFlags.ToRawKubeConfigLoader().RawConfig()
+	if err != nil {
+		log.Debugf("Unable to determine cluster name from kubeconfig: %v", err)
+		return clusterLabel
+	}
+
+	ctxName := rawConfig.CurrentContext
+	if ctx, ok := rawConfig.Contexts[ctxName]; ok && ctx.Cluster != "" {
+		return ctx.Cluster
+	}
+	if ctxName != "" {
+		return ctxName
+	}
+
+	return clusterLabel
+}
+
+// isMetricsServerNotAvailable returns true if the error indicates that the
+// metrics.k8s.io API is not available on the cluster (e.g., metrics-server
+// is not installed or not serving).
+func isMetricsServerNotAvailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Treat standard NotFound as "metrics API missing".
+	if k8serrors.IsNotFound(err) {
+		return true
+	}
+	// Fallback to string matching for clusters that return generic errors.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "metrics.k8s.io") && strings.Contains(msg, "could not find the requested resource") {
+		return true
+	}
+	return false
 }
