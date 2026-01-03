@@ -31,6 +31,7 @@ import (
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/term"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/tools/clientcmd"
 
 	// needed to authenticate with GCP
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
@@ -280,6 +281,9 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 		}
 	}
 
+	// Determine context and cloud information for header.
+	ctxName, cloudProvider, cloudCluster := getHeaderContextAndCloud(nm)
+
 	// Calculate cluster-wide utilization
 	cpuUsagePct := calculatePercentage(c.TotalUsageCPU, c.TotalAllocatableCPU)
 	memUsagePct := calculatePercentage(c.TotalUsageMemory, c.TotalAllocatableMemory)
@@ -295,7 +299,19 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 	topBorder := "╔" + strings.Repeat("═", boxWidth) + "╗"
 	midBorder := "╠" + strings.Repeat("═", boxWidth) + "╣"
 	botBorder := "╚" + strings.Repeat("═", boxWidth) + "╝"
-	titleLine := "║" + centerText("🔍 KUBERNETES CLUSTER GLANCE", boxWidth) + "║"
+
+	headerText := "glance (<) (<)"
+	if ctxName != "" {
+		headerText += fmt.Sprintf("   context: %s", ctxName)
+	}
+	if viper.GetBool("show-cloud-provider") && cloudProvider != "" {
+		headerText += fmt.Sprintf("   cloud: %s", cloudProvider)
+		if cloudCluster != "" {
+			headerText += fmt.Sprintf("   cluster: %s", cloudCluster)
+		}
+	}
+
+	titleLine := "║" + centerText(headerText, boxWidth) + "║"
 
 	fmt.Println(boxStyle.Sprint(topBorder))
 	fmt.Println(boxStyle.Sprint(titleLine))
@@ -557,6 +573,46 @@ func centerText(s string, width int) string {
 	return strings.Repeat(" ", leftPad) + s + strings.Repeat(" ", rightPad)
 }
 
+// getHeaderContextAndCloud derives context and cloud info for the summary header.
+// - context: current kubeconfig context name (if available)
+// - cloud: first detected provider from node ProviderIDs (AWS/GCE, etc.)
+// - cluster: kubeconfig cluster name for the current context (best-effort)
+func getHeaderContextAndCloud(nm *NodeMap) (contextName, cloudProvider, cloudCluster string) {
+	// Derive context/cluster from kubeconfig when possible.
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	configOverrides := &clientcmd.ConfigOverrides{}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		log.Debugf("Unable to determine kubeconfig context for header: %v", err)
+	} else {
+		ctxName := rawConfig.CurrentContext
+		if ctxName != "" {
+			contextName = ctxName
+		}
+		if ctx, ok := rawConfig.Contexts[ctxName]; ok && ctx.Cluster != "" {
+			cloudCluster = ctx.Cluster
+		}
+	}
+
+	// Derive cloud provider from the first node with a ProviderID.
+	if nm != nil {
+		for _, node := range *nm {
+			if node.ProviderID == "" {
+				continue
+			}
+			cp, _ := glanceutil.ParseProviderID(node.ProviderID)
+			if cp != "" {
+				cloudProvider = strings.ToUpper(cp)
+				break
+			}
+		}
+	}
+
+	return contextName, cloudProvider, cloudCluster
+}
+
 // printLegend prints a color legend
 func printLegend() {
 	fmt.Println()
@@ -580,7 +636,20 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	// Print header with cluster info
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 120))
-	fmt.Println("  KUBERNETES CLUSTER RESOURCE OVERVIEW")
+
+	ctxName, cloudProvider, cloudCluster := getHeaderContextAndCloud(nm)
+	header := "glance"
+	if ctxName != "" {
+		header += fmt.Sprintf("   context: %s", ctxName)
+	}
+	if viper.GetBool("show-cloud-provider") && cloudProvider != "" {
+		header += fmt.Sprintf("   cloud: %s", cloudProvider)
+		if cloudCluster != "" {
+			header += fmt.Sprintf("   cluster: %s", cloudCluster)
+		}
+	}
+	fmt.Println("  " + header)
+
 	if c.ClusterInfo.Host != "" {
 		fmt.Printf("  Host: %s  |  Version: %s  |  Nodes: %d\n",
 			c.ClusterInfo.Host, c.ClusterInfo.MasterVersion, len(*nm))
