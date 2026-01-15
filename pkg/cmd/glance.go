@@ -49,9 +49,9 @@ import (
 )
 
 const (
-	providerAWS    = "aws"
-	providerGCE    = "gce"
-	clusterLabel   = "cluster"
+	providerAWS  = "aws"
+	providerGCE  = "gce"
+	clusterLabel = "cluster"
 )
 
 var (
@@ -341,10 +341,10 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	fs := viper.GetString("field-selector")
 
 	if fs != "" || ls != "" {
-			labelSelector, err = labels.Parse(ls + " " + fs)
-			if err != nil {
-				return fmt.Errorf("invalid label/field selector: %w", err)
-			}
+		labelSelector, err = labels.Parse(ls + " " + fs)
+		if err != nil {
+			return fmt.Errorf("invalid label/field selector: %w", err)
+		}
 	}
 
 	if viper.GetBool("pods") {
@@ -530,18 +530,18 @@ func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeS
 		md, err := cache.GetOrFetch(ctx, cp, instanceKey)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"node":        n.GetName(),
-				"provider":    cp,
-				"provider_id": ns.ProviderID,
+				"node":         n.GetName(),
+				"provider":     cp,
+				"provider_id":  ns.ProviderID,
 				"instance_key": instanceKey,
 			}).Warnf("failed to fetch cloud metadata: %v", err)
 			return
 		}
 		if md == nil {
 			log.WithFields(log.Fields{
-				"node":        n.GetName(),
-				"provider":    cp,
-				"provider_id": ns.ProviderID,
+				"node":         n.GetName(),
+				"provider":     cp,
+				"provider_id":  ns.ProviderID,
 				"instance_key": instanceKey,
 			}).Debug("no cloud metadata returned for node")
 			return
