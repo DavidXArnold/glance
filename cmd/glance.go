@@ -14,7 +14,8 @@ limitations under the License.
 package main
 
 import (
-	log "github.com/sirupsen/logrus"
+	"fmt"
+	"os"
 
 	"gitlab.com/davidxarnold/glance/pkg/cmd"
 )
@@ -22,6 +23,9 @@ import (
 func main() {
 	root := cmd.NewGlanceCmd()
 	if err := root.Execute(); err != nil {
-		log.Fatalf("Error encountered while glancing: %v", err)
+		// Print a user-facing error to stderr and exit with non-zero status.
+		// Logging is handled inside the library code via configured logrus.
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
 }

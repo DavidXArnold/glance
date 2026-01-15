@@ -104,3 +104,11 @@ func TestNewGlanceCmdFlags(t *testing.T) {
 		t.Errorf("show-cloud-provider flag not found")
 	}
 }
+
+// TestGlanceK8sErrorPropagation documents the intent that GlanceK8s should
+// return errors instead of exiting the process. It is currently skipped
+// because reliably provoking an error without a real cluster or heavy
+// mocking is non-trivial.
+func TestGlanceK8sErrorPropagation(t *testing.T) {
+	t.Skip("TODO(issue 20): add a reliable error-propagation test for GlanceK8s using a fake clientset")
+}

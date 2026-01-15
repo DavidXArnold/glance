@@ -98,38 +98,36 @@ func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory bool, sho
 	return formatResourceRatio(&used, &total, isMemory, showRaw)
 }
 
-func render(nm *core.NodeMap, c *core.Totals) {
+func render(nm *core.NodeMap, c *core.Totals) error {
 	switch viper.GetString("output") {
 	case "json":
-		renderJSON(nm, c)
+		return renderJSON(nm, c)
 	case "pretty":
-		renderPretty(nm, c)
+		return renderPretty(nm, c)
 	case "chart":
-		chart(nm)
-		os.Exit(0)
+		return chart(nm)
 	case "dash":
-		dash(nm)
-		os.Exit(0)
+		return dash(nm)
 	case "pie":
-		pie(nm)
-		os.Exit(0)
+		return pie(nm)
 	default:
 		table(nm, c)
+		return nil
 	}
 }
 
-func renderJSON(nm *core.NodeMap, c *core.Totals) {
+func renderJSON(nm *core.NodeMap, c *core.Totals) error {
 	snapshot := core.NewSnapshot(*nm, *c)
 	g, err := json.MarshalIndent(snapshot, "", "\t")
 	if err != nil {
-		log.Error(err)
-		os.Exit(1)
+		log.Errorf("failed to marshal snapshot to JSON: %v", err)
+		return fmt.Errorf("failed to render JSON output: %w", err)
 	}
 	fmt.Println(string(g))
-	os.Exit(0)
+	return nil
 }
 
-func renderPretty(nm *core.NodeMap, c *core.Totals) {
+func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 	// Print cluster summary dashboard
 	printClusterSummary(nm, c)
 
@@ -251,7 +249,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	// Print legend
 	printLegend()
 
-	os.Exit(0)
+	return nil
 }
 
 // getTerminalWidth returns the terminal width, clamped between min and max.
@@ -789,19 +787,16 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	fmt.Printf("  Total Capacity Mem: %s\n", formatQuantity(c.TotalCapacityMemory))
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Println()
-
-	os.Exit(0)
 }
 
-func chart(_ *core.NodeMap) {
-	log.Fatalf("Not yet implemented")
-	// TODO: Fix go-echarts compatibility with current version
-	// The BarData and Label types have changed, this needs updating
+func chart(_ *core.NodeMap) error {
+	// Chart output is not yet implemented; return a clear error instead of exiting.
+	return fmt.Errorf("chart output is not yet implemented")
 }
 
-func dash(nm *core.NodeMap) {
+func dash(nm *core.NodeMap) error {
 	if err := ui.Init(); err != nil {
-		log.Fatalf("failed to initialize termui: %v", err)
+		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
 	defer ui.Close()
 
@@ -840,14 +835,14 @@ func dash(nm *core.NodeMap) {
 		e := <-uiEvents
 		switch e.ID {
 		case "q", ctlC:
-			return
+			return nil
 		}
 	}
 }
 
-func pie(nm *core.NodeMap) {
+func pie(nm *core.NodeMap) error {
 	if err := ui.Init(); err != nil {
-		log.Fatalf("failed to initialize termui: %v", err)
+		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
 	defer ui.Close()
 
@@ -876,7 +871,7 @@ func pie(nm *core.NodeMap) {
 		e := <-uiEvents
 		switch e.ID {
 		case "q", ctlC:
-			return
+			return nil
 		}
 	}
 }

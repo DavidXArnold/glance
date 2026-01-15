@@ -633,7 +633,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		dirtyIndicator = " | [⚠ Unsaved Changes](fg:yellow)"
 	}
 
-	sortInfo := fmt.Sprintf(" | Sort: %s", getSortModeString(state.sortMode))
+	sortInfo := fmt.Sprintf(" | Sort: %s ([1]status [2]name [3]cpu [4]memory)", getSortModeString(state.sortMode))
 
 	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s%s%s%s%s | [?]Settings [q]Quit",
 		modeStr,
