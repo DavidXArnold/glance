@@ -59,12 +59,19 @@ func ComputeNodeSnapshot(
 
 		if readyCondition == nil || readyCondition.Status != v1.ConditionTrue {
 			// Preserve existing static behavior: NotReady nodes are included
-			// with status only and excluded from totals.
-			nm[name] = &NodeStats{Status: "Not Ready"}
+			// with status only and excluded from totals, but we still record
+			// basic metadata such as creation time for AGE column rendering.
+			nm[name] = &NodeStats{
+				Status:       "Not Ready",
+				CreationTime: node.CreationTimestamp.Time,
+			}
 			continue
 		}
 
-		stats := &NodeStats{Status: "Ready"}
+		stats := &NodeStats{
+			Status:       "Ready",
+			CreationTime: node.CreationTimestamp.Time,
+		}
 
 		// Copy node info.
 		stats.NodeInfo = node.Status.NodeInfo
