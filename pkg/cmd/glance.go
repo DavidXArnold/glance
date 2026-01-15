@@ -68,12 +68,15 @@ func initConfig() {
 		// Find home directory.
 		home, err := homedir.Dir()
 		if err != nil {
-			log.Fatalln(err)
+			// If we cannot determine the home directory, log and continue without
+			// a default config path. Glance will still run using flags/env.
+			log.WithError(err).Warn("unable to determine home directory for glance config; proceeding without ~/.glance")
+		} else {
+			// Search config in ~/.glance/config (YAML by default).
+			configDir := filepath.Join(home, ".glance")
+			viper.AddConfigPath(configDir)
+			viper.SetConfigName("config")
 		}
-
-		// Search config in home directory with name ".glance" (without extension).
-		viper.AddConfigPath(home)
-		viper.SetConfigName(".glance")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
@@ -217,7 +220,9 @@ func NewGlanceCmd() *cobra.Command {
 
 	gc, err := NewGlanceConfig()
 	if err != nil {
-		log.Fatalf("Unable to create glance configuration: %v", err)
+		// Treat configuration errors as regular errors so callers/tests can handle them.
+		// Cobra will surface this via the RunE/Execute path.
+		fmt.Fprintf(os.Stderr, "unable to create glance configuration: %v\n", err)
 	}
 
 	cmd := &cobra.Command{
@@ -226,11 +231,11 @@ func NewGlanceCmd() *cobra.Command {
 		Long:          "Glance allows you to quickly look at your kubernetes resources.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		PreRun: func(cmd *cobra.Command, args []string) {
-			err = viper.BindPFlags(cmd.Flags())
-			if err != nil {
-				log.Fatalf("unable to initialize glance: %v ", err)
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := viper.BindPFlags(cmd.Flags()); err != nil {
+				return fmt.Errorf("unable to initialize glance: %w", err)
 			}
+			return nil
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return glanceutil.SetupLogger()
@@ -277,7 +282,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	nodes, err := getNodes(ctx, k8sClient)
 	if err != nil {
-		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
+		return fmt.Errorf("error getting Node list from host: %w", err)
 	}
 
 	if len(nodes.Items) == 0 {
@@ -287,7 +292,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	k8sver, err := k8sClient.Discovery().ServerVersion()
 	if err != nil {
-		log.Fatalf(" %+v ", err.Error())
+		return fmt.Errorf("failed to get server version: %w", err)
 	}
 
 	// Respect the explicit --show-cloud-provider flag or config value as-is.
@@ -336,10 +341,10 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	fs := viper.GetString("field-selector")
 
 	if fs != "" || ls != "" {
-		labelSelector, err = labels.Parse(ls + " " + fs)
-		if err != nil {
-			return err
-		}
+			labelSelector, err = labels.Parse(ls + " " + fs)
+			if err != nil {
+				return fmt.Errorf("invalid label/field selector: %w", err)
+			}
 	}
 
 	if viper.GetBool("pods") {
@@ -362,7 +367,9 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		cloudWg.Wait()
 	}
 
-	render(&nm, &totals)
+	if err := render(&nm, &totals); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -570,7 +577,9 @@ func getNamespace() (ns string) {
 
 		ns, _, err := kubeConfig.Namespace()
 		if err != nil {
-			log.Fatalf("Unable to determine namespace: %v", err)
+			// Log at debug level and fall back to a sensible default namespace.
+			log.Debugf("Unable to determine namespace from kubeconfig, falling back to %q: %v", "default", err)
+			return "default"
 		}
 		return ns
 	}

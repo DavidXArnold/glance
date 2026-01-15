@@ -249,6 +249,7 @@ At runtime in live view, use keys `1`–`4` to switch sort mode:
 - Bottom menu shows current toggle states with checkboxes (☑/☐)
 - Indicates which features are enabled/disabled
 - Always visible for quick reference
+- Status bar also shows the active sort mode and the sort keybinds (`[1]status [2]name [3]cpu [4]memory`) so users can easily change ordering.
 
 **Compact Mode:**
 - Toggle with `c` key
@@ -587,7 +588,7 @@ kubectl glance
 
 ### Config File
 
-Create `~/.glance` for persistent configuration (YAML format):
+Create `~/.glance/config` for persistent configuration (YAML format). This file is loaded automatically unless you override it with `--config`.
 
 ```yaml
 selector: "environment=production"
@@ -603,7 +604,7 @@ namespace: ""    # Initial namespace for live view (empty = all namespaces)
 cloud-cache-ttl: 5m      # TTL for cloud provider info cache (default: 5m)
 cloud-cache-disk: false  # Persist cache to ~/.glance/cloud-cache.json (default: false)
 
-# Column visibility (live mode - persisted when toggled with i/v/a keys)
+# Column visibility (live mode - persisted when toggled with w/v/a keys)
 show-node-version: false # Show node version column (default: false)
 show-node-age: false     # Show node age column (default: false)
 ```
@@ -614,7 +615,7 @@ show-node-age: false     # Show node age column (default: false)
 
 **Column Visibility:**
 - Initial state loaded from config file
-- Changes made with `i` (cloud), `v` (version), `a` (age) keys are automatically saved
+- Changes made with `w` (cloud), `v` (version), `a` (age) keys are automatically saved
 - Requires config file to exist for persistence
 
 ### Logging
@@ -622,7 +623,7 @@ show-node-age: false     # Show node age column (default: false)
 By default, glance uses `warn` level logging which minimizes terminal output. For debugging:
 
 - Set `GLANCE_LOG_LEVEL=debug` environment variable, or
-- Add `log-level: debug` to your `~/.glance` config file
+- Add `log-level: debug` to your `~/.glance/config` config file
 
 Log files are written to:
 - `~/.glance/<level>-glance.log` (preferred), or

@@ -90,6 +90,8 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 ### Error Handling
 - Return errors, don't panic (except in truly unrecoverable situations)
 - Wrap errors with context: `fmt.Errorf("failed to get nodes: %w", err)`
+- Do not call `log.Fatal`/`os.Exit` from `pkg/core`, `pkg/cloud`, `pkg/util`, or most of `pkg/cmd`. These packages should return errors.
+- Only the top-level entrypoint (`cmd/glance.go`) is allowed to decide the final process exit code.
 
 ## Testing
 
@@ -361,6 +363,7 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
 
 ### Completed on `live-enhancements` branch
 - **Live view UX improvements** - comprehensive enhancements to live monitoring interface
+- Live view status bar now shows both the active sort mode and the numeric sort keybinds (`1=status`, `2=name`, `3=cpu`, `4=memory`) so the controls are discoverable without reading docs.
 - Changed default view from Namespaces to Pods with "all namespaces" initial state
 - Namespace display in summary bar:
   - Shows "Namespace: [←→] <name>" or "All Namespaces" in summary bar
