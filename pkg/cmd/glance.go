@@ -56,6 +56,7 @@ const (
 
 var (
 	cfgFile               string
+	configPath            string
 	KubernetesConfigFlags *genericclioptions.ConfigFlags
 )
 
@@ -63,7 +64,8 @@ var (
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
+		configPath = cfgFile
+		viper.SetConfigFile(configPath)
 	} else {
 		// Find home directory.
 		home, err := homedir.Dir()
@@ -72,29 +74,83 @@ func initConfig() {
 			// a default config path. Glance will still run using flags/env.
 			log.WithError(err).Warn("unable to determine home directory for glance config; proceeding without ~/.glance")
 		} else {
-			// Search config in ~/.glance/config (YAML by default).
+			// Use ~/.glance/config (YAML by default) as the primary config file.
 			configDir := filepath.Join(home, ".glance")
-			viper.AddConfigPath(configDir)
-			viper.SetConfigName("config")
+			if err := os.MkdirAll(configDir, 0750); err != nil {
+				log.WithError(err).Warnf("unable to create config directory %q; proceeding without persistent config", configDir)
+			} else {
+				configPath = filepath.Join(configDir, "config")
+				viper.SetConfigFile(configPath)
+			}
 		}
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
 
+	// If using an extension-less config path (e.g., ~/.glance/config),
+	// tell viper to treat it as YAML so it can be read successfully.
+	if configPath != "" && filepath.Ext(configPath) == "" {
+		viper.SetConfigType("yaml")
+	}
+
 	// If a config file is found, read it in (ignore errors - config is optional)
 	_ = viper.ReadInConfig()
 
-	// Set default values for configuration options
+	// Set default values for configuration options.
+	//
+	// NOTE: We intentionally do not set defaults for show-node-version,
+	// show-node-age, or show-node-group here so that static output can
+	// distinguish between "unset" (preserve legacy behavior) and
+	// "explicitly configured". In practice this means:
+	//   - live view still treats the zero value (false) as "hidden by default"
+	//   - static view will continue to show VERSION unless the user
+	//     explicitly disables it via config or flag.
 	viper.SetDefault("cloud-cache-ttl", 5*time.Minute)
 	viper.SetDefault("cloud-cache-disk", false)
-	viper.SetDefault("show-node-version", false)
-	viper.SetDefault("show-node-age", false)
-	viper.SetDefault("show-node-group", false)
 	viper.SetDefault("filter-node-group", "")
 	viper.SetDefault("filter-capacity-type", "")
 
 	// Configure logging after config is loaded
 	configureLogging()
+}
+
+// writeConfigSafe attempts to persist viper config to the configured file.
+// If the config file does not yet exist, it will be created.
+func writeConfigSafe() {
+	// If we don't have a config path, there's nothing to do.
+	if configPath == "" {
+		log.Debug("no config file path set; skipping config write")
+		return
+	}
+
+	// Ensure the parent directory exists.
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		log.WithError(err).Debugf("Failed to create config directory %q", configDir)
+		return
+	}
+
+	// If the path has no extension, tell viper what type to use.
+	if filepath.Ext(configPath) == "" {
+		viper.SetConfigType("yaml")
+	}
+
+	// Decide whether to create or update based on file existence.
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// First-time write: create the file.
+		if err := viper.WriteConfigAs(configPath); err != nil {
+			log.WithError(err).Debug("Failed to write config")
+		}
+		return
+	} else if err != nil {
+		log.WithError(err).Debug("Failed to stat config file path")
+		return
+	}
+
+	// File exists: update in place.
+	if err := viper.WriteConfig(); err != nil {
+		log.WithError(err).Debug("Failed to write config")
+	}
 }
 
 // configureLogging sets up logging based on GLANCE_LOG_LEVEL env var or config file
@@ -173,8 +229,9 @@ func NewGlanceConfig() (gc *GlanceConfig, err error) {
 func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *string, cloudInfo *bool) {
 	cmd.PersistentFlags().StringVar(
 		fieldSelector, "field-selector", "",
-		//nolint lll
-		"Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
+		"Selector (field query) to filter on, supports '=', '==', and '!='."+
+			"(e.g. --field-selector key1=value1,key2=value2). "+
+			"The server only supports a limited number of field queries per type.")
 	_ = viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
 	cmd.PersistentFlags().StringVar(
 		labelSelector, "selector", "",
@@ -186,6 +243,17 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		cloudInfo, "show-cloud-provider", "c", false,
 		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions).\n"+
 			"Enabled by default if cloud detected.")
+
+	// Static node-column visibility flags. These mirror the live view toggles
+	// but are exposed as CLI options for the top-level glance command. Flags
+	// override values from the config file and environment.
+	var showNodeVersion bool
+	var showNodeAge bool
+	var showNodeGroup bool
+	cmd.PersistentFlags().BoolVar(&showNodeVersion,
+		"show-node-version", false, "Show node version column in static output")
+	cmd.PersistentFlags().BoolVar(&showNodeAge, "show-node-age", false, "Show node age column in static output")
+	cmd.PersistentFlags().BoolVar(&showNodeGroup, "show-node-group", false, "Show node group/pool column in static output")
 
 	// Add --raw and --exact flags (aliases)
 	var showRaw bool
@@ -200,7 +268,11 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
 	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
 	_ = viper.BindPFlag("show-cloud-provider", cmd.PersistentFlags().Lookup("show-cloud-provider"))
-	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("show-cloud-provider")) // Backwards compatibility alias
+	_ = viper.BindPFlag("cloud-info",
+		cmd.PersistentFlags().Lookup("show-cloud-provider")) // Backwards compatibility alias
+	_ = viper.BindPFlag("show-node-version", cmd.PersistentFlags().Lookup("show-node-version"))
+	_ = viper.BindPFlag("show-node-age", cmd.PersistentFlags().Lookup("show-node-age"))
+	_ = viper.BindPFlag("show-node-group", cmd.PersistentFlags().Lookup("show-node-group"))
 	_ = viper.BindPFlag("show-raw", cmd.PersistentFlags().Lookup("raw"))
 	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
 	_ = viper.BindPFlags(cmd.Flags())
