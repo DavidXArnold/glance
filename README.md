@@ -768,6 +768,9 @@ kubectl glance live --max-concurrent=100
 kubectl glance live --sort-by=cpu  # Show highest CPU usage first
 ```
 
+In live view, the summary/status bars will show how many nodes/pods are being displayed
+(e.g., "Viewing Nodes: 20/150") so it’s clear when limits are applied on large clusters.
+
 ## Development
 
 ### Building

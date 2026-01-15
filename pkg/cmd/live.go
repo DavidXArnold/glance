@@ -785,6 +785,15 @@ func renderSummaryBar(
 			min(podLimit, totalPods), totalPods)
 	}
 
+	// Add large-cluster hint when we are only showing a subset of nodes.
+	largeClusterHint := ""
+	if mode == ViewNodes && totalNodes > largeClusterThreshold && nodeLimit > 0 && nodeLimit < totalNodes {
+		largeClusterHint = fmt.Sprintf(
+			" │ [Large cluster: showing %d of %d nodes](fg:yellow)",
+			min(nodeLimit, totalNodes), totalNodes,
+		)
+	}
+
 	// Add context and cloud summary (similar to static view headers)
 	contextInfo := ""
 	if contextName != "" {
@@ -799,12 +808,13 @@ func renderSummaryBar(
 	}
 
 	summary.Text = fmt.Sprintf(
-		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s%s%s",
+		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s%s%s%s",
 		healthIcon, warnIcon, critIcon,
 		cpuBar, stats.AvgCPUUsage,
 		memBar, stats.AvgMemUsage,
 		namespaceInfo,
 		viewingInfo,
+		largeClusterHint,
 		contextInfo,
 		cloudInfo,
 	)
