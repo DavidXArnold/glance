@@ -14,8 +14,12 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"os"
 	"testing"
+
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const testDefaultNamespace = "default"
@@ -110,5 +114,43 @@ func TestNewGlanceCmdFlags(t *testing.T) {
 // because reliably provoking an error without a real cluster or heavy
 // mocking is non-trivial.
 func TestGlanceK8sErrorPropagation(t *testing.T) {
-	t.Skip("TODO(issue 20): add a reliable error-propagation test for GlanceK8s using a fake clientset")
+	t.Skip("TODO(issue 20): full GlanceK8s integration error test still requires a richer fake clientset")
+}
+
+func TestIsMetricsServerNotAvailable(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "NotFound error from API",
+			err:      k8serrors.NewNotFound(schema.GroupResource{Group: "metrics.k8s.io", Resource: "nodes"}, "foo"),
+			expected: true,
+		},
+		{
+			name:     "generic metrics.k8s.io missing message",
+			err:      errors.New("the server could not find the requested resource (get pods.metrics.k8s.io)"),
+			expected: true,
+		},
+		{
+			name:     "unrelated error",
+			err:      errors.New("some other failure"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isMetricsServerNotAvailable(tt.err)
+			if result != tt.expected {
+				t.Errorf("isMetricsServerNotAvailable(%v) = %v, want %v", tt.err, result, tt.expected)
+			}
+		})
+	}
 }
