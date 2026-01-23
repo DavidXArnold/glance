@@ -49,13 +49,14 @@ import (
 )
 
 const (
-	providerAWS    = "aws"
-	providerGCE    = "gce"
-	clusterLabel   = "cluster"
+	providerAWS  = "aws"
+	providerGCE  = "gce"
+	clusterLabel = "cluster"
 )
 
 var (
 	cfgFile               string
+	configPath            string
 	KubernetesConfigFlags *genericclioptions.ConfigFlags
 )
 
@@ -63,35 +64,93 @@ var (
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
+		configPath = cfgFile
+		viper.SetConfigFile(configPath)
 	} else {
 		// Find home directory.
 		home, err := homedir.Dir()
 		if err != nil {
-			log.Fatalln(err)
+			// If we cannot determine the home directory, log and continue without
+			// a default config path. Glance will still run using flags/env.
+			log.WithError(err).Warn("unable to determine home directory for glance config; proceeding without ~/.glance")
+		} else {
+			// Use ~/.glance/config (YAML by default) as the primary config file.
+			configDir := filepath.Join(home, ".glance")
+			if err := os.MkdirAll(configDir, 0750); err != nil {
+				log.WithError(err).Warnf("unable to create config directory %q; proceeding without persistent config", configDir)
+			} else {
+				configPath = filepath.Join(configDir, "config")
+				viper.SetConfigFile(configPath)
+			}
 		}
-
-		// Search config in home directory with name ".glance" (without extension).
-		viper.AddConfigPath(home)
-		viper.SetConfigName(".glance")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
 
+	// If using an extension-less config path (e.g., ~/.glance/config),
+	// tell viper to treat it as YAML so it can be read successfully.
+	if configPath != "" && filepath.Ext(configPath) == "" {
+		viper.SetConfigType("yaml")
+	}
+
 	// If a config file is found, read it in (ignore errors - config is optional)
 	_ = viper.ReadInConfig()
 
-	// Set default values for configuration options
+	// Set default values for configuration options.
+	//
+	// NOTE: We intentionally do not set defaults for show-node-version,
+	// show-node-age, or show-node-group here so that static output can
+	// distinguish between "unset" (preserve legacy behavior) and
+	// "explicitly configured". In practice this means:
+	//   - live view still treats the zero value (false) as "hidden by default"
+	//   - static view will continue to show VERSION unless the user
+	//     explicitly disables it via config or flag.
 	viper.SetDefault("cloud-cache-ttl", 5*time.Minute)
 	viper.SetDefault("cloud-cache-disk", false)
-	viper.SetDefault("show-node-version", false)
-	viper.SetDefault("show-node-age", false)
-	viper.SetDefault("show-node-group", false)
 	viper.SetDefault("filter-node-group", "")
 	viper.SetDefault("filter-capacity-type", "")
 
 	// Configure logging after config is loaded
 	configureLogging()
+}
+
+// writeConfigSafe attempts to persist viper config to the configured file.
+// If the config file does not yet exist, it will be created.
+func writeConfigSafe() {
+	// If we don't have a config path, there's nothing to do.
+	if configPath == "" {
+		log.Debug("no config file path set; skipping config write")
+		return
+	}
+
+	// Ensure the parent directory exists.
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		log.WithError(err).Debugf("Failed to create config directory %q", configDir)
+		return
+	}
+
+	// If the path has no extension, tell viper what type to use.
+	if filepath.Ext(configPath) == "" {
+		viper.SetConfigType("yaml")
+	}
+
+	// Decide whether to create or update based on file existence.
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// First-time write: create the file.
+		if err := viper.WriteConfigAs(configPath); err != nil {
+			log.WithError(err).Debug("Failed to write config")
+		}
+		return
+	} else if err != nil {
+		log.WithError(err).Debug("Failed to stat config file path")
+		return
+	}
+
+	// File exists: update in place.
+	if err := viper.WriteConfig(); err != nil {
+		log.WithError(err).Debug("Failed to write config")
+	}
 }
 
 // configureLogging sets up logging based on GLANCE_LOG_LEVEL env var or config file
@@ -170,8 +229,9 @@ func NewGlanceConfig() (gc *GlanceConfig, err error) {
 func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *string, cloudInfo *bool) {
 	cmd.PersistentFlags().StringVar(
 		fieldSelector, "field-selector", "",
-		//nolint lll
-		"Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
+		"Selector (field query) to filter on, supports '=', '==', and '!='."+
+			"(e.g. --field-selector key1=value1,key2=value2). "+
+			"The server only supports a limited number of field queries per type.")
 	_ = viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
 	cmd.PersistentFlags().StringVar(
 		labelSelector, "selector", "",
@@ -183,6 +243,17 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		cloudInfo, "show-cloud-provider", "c", false,
 		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions).\n"+
 			"Enabled by default if cloud detected.")
+
+	// Static node-column visibility flags. These mirror the live view toggles
+	// but are exposed as CLI options for the top-level glance command. Flags
+	// override values from the config file and environment.
+	var showNodeVersion bool
+	var showNodeAge bool
+	var showNodeGroup bool
+	cmd.PersistentFlags().BoolVar(&showNodeVersion,
+		"show-node-version", false, "Show node version column in static output")
+	cmd.PersistentFlags().BoolVar(&showNodeAge, "show-node-age", false, "Show node age column in static output")
+	cmd.PersistentFlags().BoolVar(&showNodeGroup, "show-node-group", false, "Show node group/pool column in static output")
 
 	// Add --raw and --exact flags (aliases)
 	var showRaw bool
@@ -197,7 +268,11 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	_ = viper.BindPFlag("selector", cmd.PersistentFlags().Lookup("selector"))
 	_ = viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
 	_ = viper.BindPFlag("show-cloud-provider", cmd.PersistentFlags().Lookup("show-cloud-provider"))
-	_ = viper.BindPFlag("cloud-info", cmd.PersistentFlags().Lookup("show-cloud-provider")) // Backwards compatibility alias
+	_ = viper.BindPFlag("cloud-info",
+		cmd.PersistentFlags().Lookup("show-cloud-provider")) // Backwards compatibility alias
+	_ = viper.BindPFlag("show-node-version", cmd.PersistentFlags().Lookup("show-node-version"))
+	_ = viper.BindPFlag("show-node-age", cmd.PersistentFlags().Lookup("show-node-age"))
+	_ = viper.BindPFlag("show-node-group", cmd.PersistentFlags().Lookup("show-node-group"))
 	_ = viper.BindPFlag("show-raw", cmd.PersistentFlags().Lookup("raw"))
 	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
 	_ = viper.BindPFlags(cmd.Flags())
@@ -217,7 +292,9 @@ func NewGlanceCmd() *cobra.Command {
 
 	gc, err := NewGlanceConfig()
 	if err != nil {
-		log.Fatalf("Unable to create glance configuration: %v", err)
+		// Treat configuration errors as regular errors so callers/tests can handle them.
+		// Cobra will surface this via the RunE/Execute path.
+		fmt.Fprintf(os.Stderr, "unable to create glance configuration: %v\n", err)
 	}
 
 	cmd := &cobra.Command{
@@ -226,11 +303,11 @@ func NewGlanceCmd() *cobra.Command {
 		Long:          "Glance allows you to quickly look at your kubernetes resources.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		PreRun: func(cmd *cobra.Command, args []string) {
-			err = viper.BindPFlags(cmd.Flags())
-			if err != nil {
-				log.Fatalf("unable to initialize glance: %v ", err)
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := viper.BindPFlags(cmd.Flags()); err != nil {
+				return fmt.Errorf("unable to initialize glance: %w", err)
 			}
+			return nil
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return glanceutil.SetupLogger()
@@ -277,7 +354,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	nodes, err := getNodes(ctx, k8sClient)
 	if err != nil {
-		log.Fatalf("Error getting Node list from host: %+v ", err.Error())
+		return fmt.Errorf("error getting Node list from host: %w", err)
 	}
 
 	if len(nodes.Items) == 0 {
@@ -287,7 +364,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	k8sver, err := k8sClient.Discovery().ServerVersion()
 	if err != nil {
-		log.Fatalf(" %+v ", err.Error())
+		return fmt.Errorf("failed to get server version: %w", err)
 	}
 
 	// Respect the explicit --show-cloud-provider flag or config value as-is.
@@ -338,7 +415,7 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	if fs != "" || ls != "" {
 		labelSelector, err = labels.Parse(ls + " " + fs)
 		if err != nil {
-			return err
+			return fmt.Errorf("invalid label/field selector: %w", err)
 		}
 	}
 
@@ -362,7 +439,9 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		cloudWg.Wait()
 	}
 
-	render(&nm, &totals)
+	if err := render(&nm, &totals); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -523,18 +602,18 @@ func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeS
 		md, err := cache.GetOrFetch(ctx, cp, instanceKey)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"node":        n.GetName(),
-				"provider":    cp,
-				"provider_id": ns.ProviderID,
+				"node":         n.GetName(),
+				"provider":     cp,
+				"provider_id":  ns.ProviderID,
 				"instance_key": instanceKey,
 			}).Warnf("failed to fetch cloud metadata: %v", err)
 			return
 		}
 		if md == nil {
 			log.WithFields(log.Fields{
-				"node":        n.GetName(),
-				"provider":    cp,
-				"provider_id": ns.ProviderID,
+				"node":         n.GetName(),
+				"provider":     cp,
+				"provider_id":  ns.ProviderID,
 				"instance_key": instanceKey,
 			}).Debug("no cloud metadata returned for node")
 			return
@@ -570,7 +649,9 @@ func getNamespace() (ns string) {
 
 		ns, _, err := kubeConfig.Namespace()
 		if err != nil {
-			log.Fatalf("Unable to determine namespace: %v", err)
+			// Log at debug level and fall back to a sensible default namespace.
+			log.Debugf("Unable to determine namespace from kubeconfig, falling back to %q: %v", "default", err)
+			return "default"
 		}
 		return ns
 	}

@@ -239,6 +239,55 @@ func TestResourceMetrics(t *testing.T) {
 	}
 }
 
+func TestSortNodeDataByStatus(t *testing.T) {
+	nodes := []nodeRowData{
+		{
+			row:      []string{"node-ready-low"},
+			isReady:  true,
+			cpuUsage: 0.2,
+		},
+		{
+			row:      []string{"node-notready-high"},
+			isReady:  false,
+			cpuUsage: 0.9,
+		},
+		{
+			row:      []string{"node-notready-low"},
+			isReady:  false,
+			cpuUsage: 0.3,
+		},
+		{
+			row:      []string{"node-ready-high"},
+			isReady:  true,
+			cpuUsage: 0.8,
+		},
+	}
+
+	sortNodeData(nodes, SortByStatus)
+
+	// Expect all NotReady nodes first, ordered by CPU usage descending,
+	// then Ready nodes ordered by CPU usage descending.
+	gotOrder := []string{
+		nodes[0].row[0],
+		nodes[1].row[0],
+		nodes[2].row[0],
+		nodes[3].row[0],
+	}
+
+	wantOrder := []string{
+		"node-notready-high",
+		"node-notready-low",
+		"node-ready-high",
+		"node-ready-low",
+	}
+
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Errorf("SortByStatus order[%d] = %q, want %q", i, gotOrder[i], wantOrder[i])
+		}
+	}
+}
+
 func TestMakeProgressBar(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -98,38 +98,77 @@ func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory bool, sho
 	return formatResourceRatio(&used, &total, isMemory, showRaw)
 }
 
-func render(nm *core.NodeMap, c *core.Totals) {
+func render(nm *core.NodeMap, c *core.Totals) error {
 	switch viper.GetString("output") {
 	case "json":
-		renderJSON(nm, c)
+		return renderJSON(nm, c)
 	case "pretty":
-		renderPretty(nm, c)
+		return renderPretty(nm, c)
 	case "chart":
-		chart(nm)
-		os.Exit(0)
+		return chart(nm)
 	case "dash":
-		dash(nm)
-		os.Exit(0)
+		return dash(nm)
 	case "pie":
-		pie(nm)
-		os.Exit(0)
+		return pie(nm)
 	default:
 		table(nm, c)
+		return nil
 	}
 }
 
-func renderJSON(nm *core.NodeMap, c *core.Totals) {
+func renderJSON(nm *core.NodeMap, c *core.Totals) error {
 	snapshot := core.NewSnapshot(*nm, *c)
 	g, err := json.MarshalIndent(snapshot, "", "\t")
 	if err != nil {
-		log.Error(err)
-		os.Exit(1)
+		log.Errorf("failed to marshal snapshot to JSON: %v", err)
+		return fmt.Errorf("failed to render JSON output: %w", err)
 	}
 	fmt.Println(string(g))
-	os.Exit(0)
+	return nil
 }
 
-func renderPretty(nm *core.NodeMap, c *core.Totals) {
+// buildNodeRow creates a table row for a single node
+func buildNodeRow(
+	name string,
+	v *core.NodeStats,
+	status string,
+	statusColor text.Colors,
+	showVersion, showAge, showGroup, showCloud bool,
+) pt.Row {
+	row := pt.Row{
+		name,
+		statusColor.Sprint(status),
+	}
+	if showVersion {
+		row = append(row, v.NodeInfo.KubeletVersion)
+	}
+	if showAge {
+		age := ""
+		if !v.CreationTime.IsZero() {
+			age = glanceutil.FormatAge(v.CreationTime)
+		}
+		row = append(row, age)
+	}
+	if showGroup {
+		row = append(row, v.NodeGroup)
+	}
+	row = append(row,
+		buildCPUUtilizationCell(v),
+		buildMemUtilizationCell(v),
+	)
+	if showCloud {
+		// Parse provider from ProviderID
+		provider := ""
+		if v.ProviderID != "" {
+			cp, _ := glanceutil.ParseProviderID(v.ProviderID)
+			provider = strings.ToUpper(cp)
+		}
+		row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
+	}
+	return row
+}
+
+func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 	// Print cluster summary dashboard
 	printClusterSummary(nm, c)
 
@@ -146,27 +185,88 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	sort.Strings(readyNodes)
 	sort.Strings(notReadyNodes)
 
+	// Decide which node columns to show. VERSION is shown by default to
+	// preserve legacy behavior unless the user explicitly disables it via
+	// config or flag.
+	showVersion := true
+	if viper.IsSet("show-node-version") {
+		showVersion = viper.GetBool("show-node-version")
+	}
+	showAge := viper.GetBool("show-node-age")
+	showGroup := viper.GetBool("show-node-group")
+
 	// Create main table
 	t := pt.NewWriter()
 	t.SetStyle(pt.StyleRounded)
 	t.SetOutputMirror(os.Stdout)
 
-	// Configure column colors
-	baseColumns := []pt.ColumnConfig{
-		{Number: 1, AutoMerge: false, Colors: text.Colors{text.FgHiWhite, text.Bold}},
-		{Number: 2, AutoMerge: false},
-		{Number: 3, AutoMerge: false, Colors: text.Colors{text.FgHiCyan}},
-		{Number: 4, AutoMerge: false},
-		{Number: 5, AutoMerge: false},
+	// Configure column colors (dynamic indices based on enabled columns).
+	col := 1
+	colNode := col
+	col++
+	colStatus := col
+	col++
+	colVersion := 0
+	if showVersion {
+		colVersion = col
+		col++
 	}
+	colAge := 0
+	if showAge {
+		colAge = col
+		col++
+	}
+	colGroup := 0
+	if showGroup {
+		colGroup = col
+		col++
+	}
+	colCPU := col
+	col++
+	colMem := col
+	col++
 
 	showCloud := viper.GetBool("show-cloud-provider")
+	colProvider, colRegion, colInstance, colCapacity := 0, 0, 0, 0
+	if showCloud {
+		colProvider = col
+		col++
+		colRegion = col
+		col++
+		colInstance = col
+		col++
+		colCapacity = col
+		// No increment needed for last column
+	}
+
+	baseColumns := []pt.ColumnConfig{
+		{Number: colNode, AutoMerge: false, Colors: text.Colors{text.FgHiWhite, text.Bold}},
+		{Number: colStatus, AutoMerge: false},
+	}
+	if colVersion != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{
+			Number:    colVersion,
+			AutoMerge: false,
+			Colors:    text.Colors{text.FgHiCyan},
+		})
+	}
+	if colAge != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colAge, AutoMerge: false})
+	}
+	if colGroup != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colGroup, AutoMerge: false})
+	}
+	baseColumns = append(baseColumns,
+		pt.ColumnConfig{Number: colCPU, AutoMerge: false},
+		pt.ColumnConfig{Number: colMem, AutoMerge: false},
+	)
+
 	if showCloud {
 		baseColumns = append(baseColumns,
-			pt.ColumnConfig{Number: 6, AutoMerge: false},
-			pt.ColumnConfig{Number: 7, AutoMerge: false},
-			pt.ColumnConfig{Number: 8, AutoMerge: false},
-			pt.ColumnConfig{Number: 9, AutoMerge: false},
+			pt.ColumnConfig{Number: colProvider, AutoMerge: false},
+			pt.ColumnConfig{Number: colRegion, AutoMerge: false},
+			pt.ColumnConfig{Number: colInstance, AutoMerge: false},
+			pt.ColumnConfig{Number: colCapacity, AutoMerge: false},
 		)
 	}
 	t.SetColumnConfigs(baseColumns)
@@ -174,10 +274,20 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	headerRow := pt.Row{
 		"NODE",
 		"STATUS",
-		"VERSION",
+	}
+	if showVersion {
+		headerRow = append(headerRow, "VERSION")
+	}
+	if showAge {
+		headerRow = append(headerRow, "AGE")
+	}
+	if showGroup {
+		headerRow = append(headerRow, "GROUP")
+	}
+	headerRow = append(headerRow,
 		"CPU UTILIZATION",
 		"MEMORY UTILIZATION",
-	}
+	)
 	if showCloud {
 		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
 	}
@@ -186,22 +296,16 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	// Add NotReady nodes first (if any) with red highlighting
 	for _, name := range notReadyNodes {
 		v := (*nm)[name]
-		row := pt.Row{
+		row := buildNodeRow(
 			name,
-			text.Colors{text.FgRed, text.Bold}.Sprint("⊘ " + v.Status),
-			v.NodeInfo.KubeletVersion,
-			buildCPUUtilizationCell(v),
-			buildMemUtilizationCell(v),
-		}
-		if showCloud {
-			// Parse provider from ProviderID
-			provider := ""
-			if v.ProviderID != "" {
-				cp, _ := glanceutil.ParseProviderID(v.ProviderID)
-				provider = strings.ToUpper(cp)
-			}
-			row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
-		}
+			v,
+			"⊘ "+v.Status,
+			text.Colors{text.FgRed, text.Bold},
+			showVersion,
+			showAge,
+			showGroup,
+			showCloud,
+		)
 		t.AppendRow(row)
 	}
 
@@ -213,22 +317,16 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	// Add Ready nodes with green status
 	for _, name := range readyNodes {
 		v := (*nm)[name]
-		row := pt.Row{
+		row := buildNodeRow(
 			name,
-			text.Colors{text.FgGreen, text.Bold}.Sprint("✓ " + v.Status),
-			v.NodeInfo.KubeletVersion,
-			buildCPUUtilizationCell(v),
-			buildMemUtilizationCell(v),
-		}
-		if showCloud {
-			// Parse provider from ProviderID
-			provider := ""
-			if v.ProviderID != "" {
-				cp, _ := glanceutil.ParseProviderID(v.ProviderID)
-				provider = strings.ToUpper(cp)
-			}
-			row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
-		}
+			v,
+			"✓ "+v.Status,
+			text.Colors{text.FgGreen, text.Bold},
+			showVersion,
+			showAge,
+			showGroup,
+			showCloud,
+		)
 		t.AppendRow(row)
 	}
 
@@ -236,10 +334,20 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	footerRow := pt.Row{
 		text.Colors{text.FgHiWhite, text.Bold}.Sprint("CLUSTER TOTALS"),
 		fmt.Sprintf("%d nodes", len(*nm)),
-		"",
+	}
+	if showVersion {
+		footerRow = append(footerRow, "")
+	}
+	if showAge {
+		footerRow = append(footerRow, "")
+	}
+	if showGroup {
+		footerRow = append(footerRow, "")
+	}
+	footerRow = append(footerRow,
 		buildTotalCPUCell(c),
 		buildTotalMemCell(c),
-	}
+	)
 	if showCloud {
 		footerRow = append(footerRow, "", "", "", "")
 	}
@@ -251,7 +359,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) {
 	// Print legend
 	printLegend()
 
-	os.Exit(0)
+	return nil
 }
 
 // getTerminalWidth returns the terminal width, clamped between min and max.
@@ -625,15 +733,118 @@ func printLegend() {
 	fmt.Println()
 }
 
+// buildTableRow creates a standard table row for a single node (text output)
+func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGroup, showCloud bool) pt.Row {
+	// Calculate utilization percentages.
+	cpuPct := "--"
+	if v.AllocatableCPU != nil && v.UsageCPU != nil && v.AllocatableCPU.MilliValue() > 0 {
+		pct := float64(v.UsageCPU.MilliValue()) / float64(v.AllocatableCPU.MilliValue()) * 100
+		cpuPct = fmt.Sprintf("%.1f%%", pct)
+	}
+
+	memPct := "--"
+	if v.AllocatableMemory != nil && v.UsageMemory != nil && v.AllocatableMemory.Value() > 0 {
+		pct := float64(v.UsageMemory.Value()) / float64(v.AllocatableMemory.Value()) * 100
+		memPct = fmt.Sprintf("%.1f%%", pct)
+	}
+
+	// Format status with indicator.
+	status := v.Status
+	if status == "" {
+		status = "Unknown"
+	}
+
+	row := pt.Row{name, status}
+	if showVersion {
+		row = append(row, v.NodeInfo.KubeletVersion)
+	}
+	if showAge {
+		age := ""
+		if !v.CreationTime.IsZero() {
+			age = glanceutil.FormatAge(v.CreationTime)
+		}
+		row = append(row, age)
+	}
+	if showGroup {
+		row = append(row, v.NodeGroup)
+	}
+
+	row = append(row,
+		formatQuantityValue(v.AllocatedCPUrequests),
+		formatQuantityValue(v.AllocatedCPULimits),
+		formatQuantity(v.UsageCPU),
+		cpuPct,
+		formatQuantityValue(v.AllocatedMemoryRequests),
+		formatQuantityValue(v.AllocatedMemoryLimits),
+		formatQuantity(v.UsageMemory),
+		memPct,
+	)
+
+	if showCloud {
+		// Parse provider from ProviderID.
+		provider := ""
+		if v.ProviderID != "" {
+			cp, _ := glanceutil.ParseProviderID(v.ProviderID)
+			provider = strings.ToUpper(cp)
+		}
+		row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
+	}
+
+	return row
+}
+
+// buildTableFooter creates the footer row for the text table
+func buildTableFooter(c *core.Totals, numNodes int, showVersion, showAge, showGroup, showCloud bool) pt.Row {
+	totalCPUPct := "--"
+	if c.TotalAllocatableCPU != nil && c.TotalUsageCPU != nil && c.TotalAllocatableCPU.MilliValue() > 0 {
+		pct := float64(c.TotalUsageCPU.MilliValue()) / float64(c.TotalAllocatableCPU.MilliValue()) * 100
+		totalCPUPct = fmt.Sprintf("%.1f%%", pct)
+	}
+
+	totalMemPct := "--"
+	if c.TotalAllocatableMemory != nil && c.TotalUsageMemory != nil && c.TotalAllocatableMemory.Value() > 0 {
+		pct := float64(c.TotalUsageMemory.Value()) / float64(c.TotalAllocatableMemory.Value()) * 100
+		totalMemPct = fmt.Sprintf("%.1f%%", pct)
+	}
+
+	footerRow := pt.Row{
+		"TOTALS",
+		fmt.Sprintf("%d nodes", numNodes),
+	}
+	if showVersion {
+		footerRow = append(footerRow, "")
+	}
+	if showAge {
+		footerRow = append(footerRow, "")
+	}
+	if showGroup {
+		footerRow = append(footerRow, "")
+	}
+	footerRow = append(footerRow,
+		formatQuantity(c.TotalAllocatedCPUrequests),
+		formatQuantity(c.TotalAllocatedCPULimits),
+		formatQuantity(c.TotalUsageCPU),
+		totalCPUPct,
+		formatQuantity(c.TotalAllocatedMemoryRequests),
+		formatQuantity(c.TotalAllocatedMemoryLimits),
+		formatQuantity(c.TotalUsageMemory),
+		totalMemPct,
+	)
+	if showCloud {
+		footerRow = append(footerRow, "", "", "", "")
+	}
+	return footerRow
+}
+
 func table(nm *core.NodeMap, c *core.Totals) {
-	// Sort nodes by name for consistent output
+	// Sort nodes by name for consistent output.
 	nodeNames := make([]string, 0, len(*nm))
 	for name := range *nm {
 		nodeNames = append(nodeNames, name)
 	}
 	sort.Strings(nodeNames)
 
-	// Print header with cluster info
+	// Print header with cluster info.
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 120))
 
@@ -657,128 +868,145 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	fmt.Println(strings.Repeat("=", 120))
 	fmt.Println()
 
-	// Create main node table with borders
+	// Decide which node columns to show. VERSION is shown by default to
+	// preserve legacy behavior unless the user explicitly disables it via
+	// config or flag.
+	showVersion := true
+	if viper.IsSet("show-node-version") {
+		showVersion = viper.GetBool("show-node-version")
+	}
+	showAge := viper.GetBool("show-node-age")
+	showGroup := viper.GetBool("show-node-group")
+
+	// Create main node table with borders.
 	t := pt.NewWriter()
 	t.SetStyle(pt.StyleLight)
 	t.SetOutputMirror(os.Stdout)
 
-	// Configure column alignment
-	baseColumns := []pt.ColumnConfig{
-		{Number: 1, Align: text.AlignLeft},   // Name
-		{Number: 2, Align: text.AlignCenter}, // Status
-		{Number: 3, Align: text.AlignLeft},   // Version
-		{Number: 4, Align: text.AlignRight},  // CPU Req
-		{Number: 5, Align: text.AlignRight},  // CPU Lim
-		{Number: 6, Align: text.AlignRight},  // CPU Use
-		{Number: 7, Align: text.AlignRight},  // CPU %
-		{Number: 8, Align: text.AlignRight},  // Mem Req
-		{Number: 9, Align: text.AlignRight},  // Mem Lim
-		{Number: 10, Align: text.AlignRight}, // Mem Use
-		{Number: 11, Align: text.AlignRight}, // Mem %
+	// Configure column alignment dynamically based on which optional node
+	// columns are enabled.
+	col := 1
+	colNode := col
+	col++
+	colStatus := col
+	col++
+	colVersion := 0
+	if showVersion {
+		colVersion = col
+		col++
+	}
+	colAge := 0
+	if showAge {
+		colAge = col
+		col++
+	}
+	colGroup := 0
+	if showGroup {
+		colGroup = col
+		col++
 	}
 
+	colCPUReq := col
+	col++
+	colCPULim := col
+	col++
+	colCPUUse := col
+	col++
+	colCPUPct := col
+	col++
+	colMemReq := col
+	col++
+	colMemLim := col
+	col++
+	colMemUse := col
+	col++
+	colMemPct := col
+	// col++ is not needed for the last column
+
 	showCloud := viper.GetBool("show-cloud-provider")
+	colProvider, colRegion, colInstance, colCapacity := 0, 0, 0, 0
+	if showCloud {
+		colProvider = col
+		col++
+		colRegion = col
+		col++
+		colInstance = col
+		col++
+		colCapacity = col
+		// col++ is not needed for the last column
+	}
+
+	var baseColumns []pt.ColumnConfig
+	baseColumns = append(baseColumns,
+		pt.ColumnConfig{Number: colNode, Align: text.AlignLeft},     // Name
+		pt.ColumnConfig{Number: colStatus, Align: text.AlignCenter}, // Status
+	)
+	if colVersion != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colVersion, Align: text.AlignLeft}) // Version
+	}
+	if colAge != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colAge, Align: text.AlignLeft}) // Age
+	}
+	if colGroup != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colGroup, Align: text.AlignLeft}) // Group
+	}
+
+	baseColumns = append(baseColumns,
+		pt.ColumnConfig{Number: colCPUReq, Align: text.AlignRight}, // CPU Req
+		pt.ColumnConfig{Number: colCPULim, Align: text.AlignRight}, // CPU Lim
+		pt.ColumnConfig{Number: colCPUUse, Align: text.AlignRight}, // CPU Use
+		pt.ColumnConfig{Number: colCPUPct, Align: text.AlignRight}, // CPU %
+		pt.ColumnConfig{Number: colMemReq, Align: text.AlignRight}, // Mem Req
+		pt.ColumnConfig{Number: colMemLim, Align: text.AlignRight}, // Mem Lim
+		pt.ColumnConfig{Number: colMemUse, Align: text.AlignRight}, // Mem Use
+		pt.ColumnConfig{Number: colMemPct, Align: text.AlignRight}, // Mem %
+	)
+
 	if showCloud {
 		baseColumns = append(baseColumns,
-			pt.ColumnConfig{Number: 12, Align: text.AlignLeft}, // Provider
-			pt.ColumnConfig{Number: 13, Align: text.AlignLeft}, // Region
-			pt.ColumnConfig{Number: 14, Align: text.AlignLeft}, // Instance Type
-			pt.ColumnConfig{Number: 15, Align: text.AlignLeft}, // Capacity Type
+			pt.ColumnConfig{Number: colProvider, Align: text.AlignLeft}, // Provider
+			pt.ColumnConfig{Number: colRegion, Align: text.AlignLeft},   // Region
+			pt.ColumnConfig{Number: colInstance, Align: text.AlignLeft}, // Instance Type
+			pt.ColumnConfig{Number: colCapacity, Align: text.AlignLeft}, // Capacity Type
 		)
 	}
 	t.SetColumnConfigs(baseColumns)
 
-	headerRow := pt.Row{
-		"NODE", "STATUS", "VERSION",
+	headerRow := pt.Row{"NODE", "STATUS"}
+	if showVersion {
+		headerRow = append(headerRow, "VERSION")
+	}
+	if showAge {
+		headerRow = append(headerRow, "AGE")
+	}
+	if showGroup {
+		headerRow = append(headerRow, "GROUP")
+	}
+	headerRow = append(headerRow,
 		"CPU REQ", "CPU LIM", "CPU USE", "CPU %",
 		"MEM REQ", "MEM LIM", "MEM USE", "MEM %",
-	}
+	)
 	if showCloud {
 		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
 	}
 	t.AppendHeader(headerRow)
 
-	// Add node rows
+	// Add node rows.
 	for _, name := range nodeNames {
 		v := (*nm)[name]
-
-		// Calculate utilization percentages
-		cpuPct := "--"
-		if v.AllocatableCPU != nil && v.UsageCPU != nil && v.AllocatableCPU.MilliValue() > 0 {
-			pct := float64(v.UsageCPU.MilliValue()) / float64(v.AllocatableCPU.MilliValue()) * 100
-			cpuPct = fmt.Sprintf("%.1f%%", pct)
-		}
-
-		memPct := "--"
-		if v.AllocatableMemory != nil && v.UsageMemory != nil && v.AllocatableMemory.Value() > 0 {
-			pct := float64(v.UsageMemory.Value()) / float64(v.AllocatableMemory.Value()) * 100
-			memPct = fmt.Sprintf("%.1f%%", pct)
-		}
-
-		// Format status with indicator
-		status := v.Status
-		if status == "" {
-			status = "Unknown"
-		}
-
-		row := pt.Row{
-			name,
-			status,
-			v.NodeInfo.KubeletVersion,
-			formatQuantityValue(v.AllocatedCPUrequests),
-			formatQuantityValue(v.AllocatedCPULimits),
-			formatQuantity(v.UsageCPU),
-			cpuPct,
-			formatQuantityValue(v.AllocatedMemoryRequests),
-			formatQuantityValue(v.AllocatedMemoryLimits),
-			formatQuantity(v.UsageMemory),
-			memPct,
-		}
-
-		if showCloud {
-			// Parse provider from ProviderID
-			provider := ""
-			if v.ProviderID != "" {
-				cp, _ := glanceutil.ParseProviderID(v.ProviderID)
-				provider = strings.ToUpper(cp)
-			}
-			row = append(row, provider, v.Region, v.InstanceType, v.CapacityType)
-		}
-
+		row := buildTableRow(name, v, showVersion, showAge, showGroup, showCloud)
 		t.AppendRow(row)
 	}
 
-	// Add totals footer
-	totalCPUPct := "--"
-	if c.TotalAllocatableCPU != nil && c.TotalUsageCPU != nil && c.TotalAllocatableCPU.MilliValue() > 0 {
-		pct := float64(c.TotalUsageCPU.MilliValue()) / float64(c.TotalAllocatableCPU.MilliValue()) * 100
-		totalCPUPct = fmt.Sprintf("%.1f%%", pct)
-	}
-
-	totalMemPct := "--"
-	if c.TotalAllocatableMemory != nil && c.TotalUsageMemory != nil && c.TotalAllocatableMemory.Value() > 0 {
-		pct := float64(c.TotalUsageMemory.Value()) / float64(c.TotalAllocatableMemory.Value()) * 100
-		totalMemPct = fmt.Sprintf("%.1f%%", pct)
-	}
+	// Add totals footer.
+	footerRow := buildTableFooter(c, len(*nm), showVersion, showAge, showGroup, showCloud)
 
 	t.AppendSeparator()
-	t.AppendFooter(pt.Row{
-		"TOTALS",
-		fmt.Sprintf("%d nodes", len(*nm)),
-		"",
-		formatQuantity(c.TotalAllocatedCPUrequests),
-		formatQuantity(c.TotalAllocatedCPULimits),
-		formatQuantity(c.TotalUsageCPU),
-		totalCPUPct,
-		formatQuantity(c.TotalAllocatedMemoryRequests),
-		formatQuantity(c.TotalAllocatedMemoryLimits),
-		formatQuantity(c.TotalUsageMemory),
-		totalMemPct,
-	})
+	t.AppendFooter(footerRow)
 
 	t.Render()
 
-	// Print capacity summary
+	// Print capacity summary.
 	fmt.Println()
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Println("  CLUSTER CAPACITY")
@@ -789,19 +1017,16 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	fmt.Printf("  Total Capacity Mem: %s\n", formatQuantity(c.TotalCapacityMemory))
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Println()
-
-	os.Exit(0)
 }
 
-func chart(_ *core.NodeMap) {
-	log.Fatalf("Not yet implemented")
-	// TODO: Fix go-echarts compatibility with current version
-	// The BarData and Label types have changed, this needs updating
+func chart(_ *core.NodeMap) error {
+	// Chart output is not yet implemented; return a clear error instead of exiting.
+	return fmt.Errorf("chart output is not yet implemented")
 }
 
-func dash(nm *core.NodeMap) {
+func dash(nm *core.NodeMap) error {
 	if err := ui.Init(); err != nil {
-		log.Fatalf("failed to initialize termui: %v", err)
+		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
 	defer ui.Close()
 
@@ -840,14 +1065,14 @@ func dash(nm *core.NodeMap) {
 		e := <-uiEvents
 		switch e.ID {
 		case "q", ctlC:
-			return
+			return nil
 		}
 	}
 }
 
-func pie(nm *core.NodeMap) {
+func pie(nm *core.NodeMap) error {
 	if err := ui.Init(); err != nil {
-		log.Fatalf("failed to initialize termui: %v", err)
+		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
 	defer ui.Close()
 
@@ -876,7 +1101,7 @@ func pie(nm *core.NodeMap) {
 		e := <-uiEvents
 		switch e.ID {
 		case "q", ctlC:
-			return
+			return nil
 		}
 	}
 }

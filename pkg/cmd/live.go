@@ -243,6 +243,14 @@ func runLive(
 	sortMode SortMode,
 	initialNamespace string,
 ) error {
+	// Ensure configuration is initialized so that live view honors
+	// settings from ~/.glance/config (e.g., show-node-version, show-node-age,
+	// show-node-group) even if cobra.OnInitialize did not run for some
+	// reason in this execution path.
+	if configPath == "" {
+		initConfig()
+	}
+
 	if err := ui.Init(); err != nil {
 		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
@@ -391,51 +399,51 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 	case "b":
 		state.showBars = !state.showBars
 		viper.Set("show-bars", state.showBars)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "%":
 		state.showPercentages = !state.showPercentages
 		viper.Set("show-percentages", state.showPercentages)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "c":
 		state.compactMode = !state.compactMode
 		viper.Set("compact-mode", state.compactMode)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "r":
 		state.showRawResources = !state.showRawResources
 		viper.Set("show-raw-resources", state.showRawResources)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "w":
 		state.showCloudInfo = !state.showCloudInfo
 		viper.Set("show-cloud-provider", state.showCloudInfo)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "v":
 		state.showNodeVersion = !state.showNodeVersion
 		viper.Set("show-node-version", state.showNodeVersion)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "a":
 		state.showNodeAge = !state.showNodeAge
 		viper.Set("show-node-age", state.showNodeAge)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "g":
 		state.showNodeGroup = !state.showNodeGroup
 		viper.Set("show-node-group", state.showNodeGroup)
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "1":
 		state.sortMode = SortByStatus
 		viper.Set("sort-by", "status")
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "2":
 		state.sortMode = SortByName
 		viper.Set("sort-by", "name")
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "3":
 		state.sortMode = SortByCPU
 		viper.Set("sort-by", "cpu")
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "4":
 		state.sortMode = SortByMemory
 		viper.Set("sort-by", "memory")
-		_ = viper.WriteConfig()
+		writeConfigSafe()
 	case "<Up>":
 		handleUpArrow(state)
 	case "<Down>":
@@ -633,7 +641,7 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 		dirtyIndicator = " | [⚠ Unsaved Changes](fg:yellow)"
 	}
 
-	sortInfo := fmt.Sprintf(" | Sort: %s", getSortModeString(state.sortMode))
+	sortInfo := fmt.Sprintf(" | Sort: %s ([1]status [2]name [3]cpu [4]memory)", getSortModeString(state.sortMode))
 
 	state.statusBar.Text = fmt.Sprintf(" %s | Updated: %s%s%s%s%s | [?]Settings [q]Quit",
 		modeStr,
@@ -785,6 +793,15 @@ func renderSummaryBar(
 			min(podLimit, totalPods), totalPods)
 	}
 
+	// Add large-cluster hint when we are only showing a subset of nodes.
+	largeClusterHint := ""
+	if mode == ViewNodes && totalNodes > largeClusterThreshold && nodeLimit > 0 && nodeLimit < totalNodes {
+		largeClusterHint = fmt.Sprintf(
+			" │ [Large cluster: showing %d of %d nodes](fg:yellow)",
+			min(nodeLimit, totalNodes), totalNodes,
+		)
+	}
+
 	// Add context and cloud summary (similar to static view headers)
 	contextInfo := ""
 	if contextName != "" {
@@ -799,12 +816,13 @@ func renderSummaryBar(
 	}
 
 	summary.Text = fmt.Sprintf(
-		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s%s%s",
+		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s%s%s%s",
 		healthIcon, warnIcon, critIcon,
 		cpuBar, stats.AvgCPUUsage,
 		memBar, stats.AvgMemUsage,
 		namespaceInfo,
 		viewingInfo,
+		largeClusterHint,
 		contextInfo,
 		cloudInfo,
 	)
@@ -2252,9 +2270,7 @@ func saveAllSettings(state *LiveState) {
 	viper.Set("node-limit", state.nodeLimit)
 	viper.Set("pod-limit", state.podLimit)
 
-	if err := viper.WriteConfig(); err != nil {
-		log.Debugf("Failed to write config: %v", err)
-	}
+	writeConfigSafe()
 }
 
 // updateModalScroll adjusts scroll offset to keep selected row visible.

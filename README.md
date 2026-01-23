@@ -153,8 +153,15 @@ kubectl glance --pods
 # Show exact values instead of human-readable (e.g., 1000m vs 1)
 kubectl glance --exact
 
+# Control node columns in static output (top-level kubectl glance)
+# VERSION is shown by default unless explicitly disabled.
+# AGE and GROUP are only shown when enabled.
+kubectl glance --show-node-age             # add AGE column
+kubectl glance --show-node-group           # add GROUP column
+kubectl glance --show-node-version=false   # hide VERSION column
+
 # Combine options
-kubectl glance -c -p -o pretty --exact
+kubectl glance -c -p -o pretty --exact --show-node-age --show-node-group
 ```
 
 ### Live View
@@ -249,6 +256,7 @@ At runtime in live view, use keys `1`–`4` to switch sort mode:
 - Bottom menu shows current toggle states with checkboxes (☑/☐)
 - Indicates which features are enabled/disabled
 - Always visible for quick reference
+- Status bar also shows the active sort mode and the sort keybinds (`[1]status [2]name [3]cpu [4]memory`) so users can easily change ordering.
 
 **Compact Mode:**
 - Toggle with `c` key
@@ -539,14 +547,17 @@ kubectl glance -o json \
 
 ### Static View Flags
 
-|| Flag | Short | Default | Description |
-||------|-------|---------|-------------|
-|| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
-|| `--show-cloud-provider` | `-c` | `false` | Display cloud provider metadata (AWS/GCP instance types, regions) when set to true; off by default |
-| `--pods` | `-p` | `false` | Display pod-level resource details in static view |
-| `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
-| `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
-| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
+||| Flag | Short | Default | Description |
+|||------|-------|---------|-------------|
+||| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
+||| `--show-cloud-provider` | `-c` | `false` | Display cloud provider metadata (AWS/GCP instance types, regions) when set to true; off by default |
+|| `--pods` | `-p` | `false` | Display pod-level resource details in static view |
+|| `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
+|| `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
+|| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
+|| `--show-node-version` | | *unset* (treated as "show") | Control VERSION column in static output: when explicitly set to `false`, hides the VERSION column; when unset or `true`, VERSION is shown |
+|| `--show-node-age` | | `false` | Show AGE column (node creation time) in static output |
+|| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
 
 ### Live View Flags
 
@@ -587,7 +598,7 @@ kubectl glance
 
 ### Config File
 
-Create `~/.glance` for persistent configuration (YAML format):
+Create `~/.glance/config` for persistent configuration (YAML format). This file is loaded automatically unless you override it with `--config`. If it does not exist, Glance will create it on first write (for example, when you toggle live view settings).
 
 ```yaml
 selector: "environment=production"
@@ -603,9 +614,18 @@ namespace: ""    # Initial namespace for live view (empty = all namespaces)
 cloud-cache-ttl: 5m      # TTL for cloud provider info cache (default: 5m)
 cloud-cache-disk: false  # Persist cache to ~/.glance/cloud-cache.json (default: false)
 
-# Column visibility (live mode - persisted when toggled with i/v/a keys)
-show-node-version: false # Show node version column (default: false)
-show-node-age: false     # Show node age column (default: false)
+# Column visibility (live mode and static view)
+# For live mode, these are persisted when toggled with w/v/a/g keys.
+# For static view (top-level kubectl glance), these control which
+# columns are rendered when set explicitly. Flags override config.
+#   - show-node-version: when unset, VERSION is shown by default; when
+#     set to false (or passed as --show-node-version=false), the
+#     VERSION column is hidden in static output.
+#   - show-node-age: when true (or --show-node-age), add AGE column.
+#   - show-node-group: when true (or --show-node-group), add GROUP column.
+show-node-version: false
+show-node-age: false
+show-node-group: false
 ```
 
 **Cloud Cache Settings:**
@@ -614,7 +634,7 @@ show-node-age: false     # Show node age column (default: false)
 
 **Column Visibility:**
 - Initial state loaded from config file
-- Changes made with `i` (cloud), `v` (version), `a` (age) keys are automatically saved
+- Changes made with `w` (cloud), `v` (version), `a` (age) keys are automatically saved
 - Requires config file to exist for persistence
 
 ### Logging
@@ -622,7 +642,7 @@ show-node-age: false     # Show node age column (default: false)
 By default, glance uses `warn` level logging which minimizes terminal output. For debugging:
 
 - Set `GLANCE_LOG_LEVEL=debug` environment variable, or
-- Add `log-level: debug` to your `~/.glance` config file
+- Add `log-level: debug` to your `~/.glance/config` config file
 
 Log files are written to:
 - `~/.glance/<level>-glance.log` (preferred), or
@@ -766,6 +786,9 @@ kubectl glance live --max-concurrent=100
 # Sort by specific criteria to focus on problem areas
 kubectl glance live --sort-by=cpu  # Show highest CPU usage first
 ```
+
+In live view, the summary/status bars will show how many nodes/pods are being displayed
+(e.g., "Viewing Nodes: 20/150") so it’s clear when limits are applied on large clusters.
 
 ## Development
 
