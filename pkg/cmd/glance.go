@@ -343,6 +343,11 @@ func NewGlanceCmd() *cobra.Command {
 	// Add Kubernetes config flags (Context, Kubeconfig, Namespace, etc.) to the command
 	gc.configFlags.AddFlags(cmd.PersistentFlags())
 
+	// Update the usage description for the "cluster" flag to clarify its purpose
+	if clusterFlag := cmd.PersistentFlags().Lookup("cluster"); clusterFlag != nil {
+		clusterFlag.Usage = "The name of the kubeconfig cluster to use (rarely needed; prefer --context)"
+	}
+
 	// Add live subcommand
 	cmd.AddCommand(NewLiveCmd(gc))
 
