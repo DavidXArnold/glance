@@ -22,7 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-const testDefaultNamespace = "default"
 
 func TestNewGlanceConfig(t *testing.T) {
 	// Skip this test in CI environments where kubeconfig is not available
@@ -41,8 +40,9 @@ func TestNewGlanceConfig(t *testing.T) {
 		t.Errorf("NewGlanceConfig() configFlags is nil")
 	}
 
-	if gc.restConfig == nil {
-		t.Errorf("NewGlanceConfig() restConfig is nil")
+	// restConfig is now populated lazily in RunE, so it should be nil initially
+	if gc.restConfig != nil {
+		t.Errorf("NewGlanceConfig() restConfig should be nil (lazy loaded)")
 	}
 }
 func TestNewGlanceCmdNotNil(t *testing.T) {
@@ -58,23 +58,6 @@ func TestNewGlanceCmdNotNil(t *testing.T) {
 
 	if cmd.Long == "" {
 		t.Errorf("NewGlanceCmd() Long is empty")
-	}
-}
-func TestGetNamespace(t *testing.T) {
-	// Skip this test in CI environments where kubeconfig is not available
-	if os.Getenv("CI") != "" || os.Getenv("GITLAB_CI") != "" {
-		t.Skip("Skipping test in CI environment - no kubeconfig available")
-	}
-
-	ns := getNamespace()
-
-	if ns == "" {
-		t.Errorf("getNamespace() returned empty string")
-	}
-
-	// Most likely returns "default" if no namespace is set
-	if ns != testDefaultNamespace && ns != "" {
-		t.Logf("getNamespace() returned %q", ns)
 	}
 }
 func TestGetLabelSelector(t *testing.T) {
