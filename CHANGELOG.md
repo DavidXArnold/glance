@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-01-27
+
+### Added
+- Support for standard kubectl configuration flags on all commands via embedded `genericclioptions.ConfigFlags` (e.g., `--context`, `--cluster`, `--user`, `--kubeconfig`, `--namespace`).
+- Configurable node column visibility for static output (`kubectl glance`) and live view using `--show-node-version`, `--show-node-age`, and `--show-node-group` flags plus matching config keys.
+
+### Changed
+- REST config is now resolved lazily in command execution so kubectl-style flags and kubeconfig context are fully honored for both static and live commands.
+- Live view initial namespace is derived from the active kubeconfig context/namespace instead of always defaulting to "all namespaces".
+- Clarified the `--cluster` flag help text to note it is rarely needed and that `--context` is usually preferred.
+- Refactored pretty and text renderers to share helpers, reducing code duplication and cyclomatic complexity while preserving existing output formats.
+
+### Fixed
+- Correctly populate node creation time in aggregated snapshots so AGE columns render values when enabled.
+- Ensure extension-less config files (e.g., `~/.glance/config`) are treated as YAML and honored on first run for both static and live commands.
+- Resolved remaining lint issues in `pkg/cmd/glance.go` and `pkg/cmd/render.go` (ineffectual assignments, long lines, and duplication) without changing user-visible behavior.
+
 ## [0.2.2] - 2026-01-03
 
 ### Added

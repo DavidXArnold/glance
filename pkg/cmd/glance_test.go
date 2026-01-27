@@ -22,7 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-
 func TestNewGlanceConfig(t *testing.T) {
 	// Skip this test in CI environments where kubeconfig is not available
 	if os.Getenv("CI") != "" || os.Getenv("GITLAB_CI") != "" {
