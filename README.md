@@ -10,6 +10,8 @@
 
 A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization, and live monitoring. Provides quick insights into CPU and memory usage across nodes, namespaces, pods, and deployments.
 
+> Note: Glance is developed on GitLab at https://gitlab.com/davidxarnold/glance and mirrored to GitHub at https://github.com/DavidXArnold/glance. Please open issues and feature requests on GitLab.
+
 ## Features
 
 - 📊 **Multiple Output Formats** - Text, Pretty tables, JSON, Dashboard, Pie charts, and more
