@@ -126,6 +126,10 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 - Uploads to GitLab Package Registry
 - Creates GitLab Release
 - Updates `plugins/krew/glance.yaml` with new checksums
+- Syncs tags and the `main` branch to the GitHub mirror (`github.com/DavidXArnold/glance`)
+- Triggers the krew-release-bot GitHub Action when `plugins/krew/glance.yaml` changes on `main`
+  - The GitHub Action runs `rajatjindal/krew-release-bot` against `plugins/krew/glance.yaml`
+  - The bot opens/updates a PR in `kubernetes-sigs/krew-index` with the new manifest for the tagged release
 
 **Version naming:**
 - **Patch** (0.1.X): Bug fixes, minor improvements, documentation updates
