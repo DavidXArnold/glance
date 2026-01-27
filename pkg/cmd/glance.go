@@ -23,7 +23,6 @@ import (
 	"time"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
@@ -214,15 +213,9 @@ func configureLogging() {
 // NewGlanceConfig provides an instance of GlanceConfig with default values.
 func NewGlanceConfig() (gc *GlanceConfig, err error) {
 	cf := genericclioptions.NewConfigFlags(true)
-	rc, err := cf.ToRESTConfig()
-	if err != nil {
-		return nil, err
-	}
-
 	return &GlanceConfig{
 		configFlags: cf,
-		restConfig:  rc,
-	}, err
+	}, nil
 }
 
 // setupGlanceFlags configures persistent flags for the glance command.
@@ -319,6 +312,13 @@ func NewGlanceCmd() *cobra.Command {
 			viper.Set("exact", showRaw)
 
 			// create the clientset
+			// We resolve the REST config here to ensure flags (like --context) are respected
+			rc, err := gc.configFlags.ToRESTConfig()
+			if err != nil {
+				return fmt.Errorf("failed to get kubernetes config: %w", err)
+			}
+			gc.restConfig = rc
+
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
@@ -339,6 +339,14 @@ func NewGlanceCmd() *cobra.Command {
 	cmd.Version = v.Version
 
 	setupGlanceFlags(cmd, &labelSelector, &fieldSelector, &output, &cloudInfo)
+
+	// Add Kubernetes config flags (Context, Kubeconfig, Namespace, etc.) to the command
+	gc.configFlags.AddFlags(cmd.PersistentFlags())
+
+	// Update the usage description for the "cluster" flag to clarify its purpose
+	if clusterFlag := cmd.PersistentFlags().Lookup("cluster"); clusterFlag != nil {
+		clusterFlag.Usage = "The name of the kubeconfig cluster to use (rarely needed; prefer --context)"
+	}
 
 	// Add live subcommand
 	cmd.AddCommand(NewLiveCmd(gc))
@@ -420,10 +428,16 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}
 
 	if viper.GetBool("pods") {
+		namespace, _, err := gc.configFlags.ToRawKubeConfigLoader().Namespace()
+		if err != nil {
+			log.Debugf("Failed to determine namespace: %v", err)
+			namespace = "default"
+		}
+
 		for _, node := range nodes.Items {
 			podList := &v1.PodList{Items: podsByNode[node.Name]}
 			if existing, ok := nm[node.Name]; ok {
-				existing.PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector)
+				existing.PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector, namespace)
 			}
 		}
 	}
@@ -506,11 +520,12 @@ func getPodsInfo(
 	podList *v1.PodList,
 	metricsClient metricsclientset.Interface,
 	selector labels.Selector,
+	namespace string,
 ) map[string]*PodInfo {
 	podMap := make(map[string]*PodInfo)
 	for i := range podList.Items {
 		n := podList.Items[i].Name
-		_, _ = getPodMetricsFromMetricsAPI(ctx, metricsClient, n, getNamespace(), selector)
+		_, _ = getPodMetricsFromMetricsAPI(ctx, metricsClient, n, namespace, selector)
 	}
 	return podMap
 }
@@ -637,25 +652,6 @@ func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeS
 			ns.CapacityType = md.CapacityType
 		}
 	}()
-}
-
-func getNamespace() (ns string) {
-	ns = viper.GetString("namespace")
-	if ns == "" {
-		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-		configOverrides := &clientcmd.ConfigOverrides{}
-		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules,
-			configOverrides)
-
-		ns, _, err := kubeConfig.Namespace()
-		if err != nil {
-			// Log at debug level and fall back to a sensible default namespace.
-			log.Debugf("Unable to determine namespace from kubeconfig, falling back to %q: %v", "default", err)
-			return "default"
-		}
-		return ns
-	}
-	return
 }
 
 // getClusterName returns a human-friendly cluster name for use in messages.

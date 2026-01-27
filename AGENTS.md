@@ -104,6 +104,11 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 
 **CRITICAL: Always update CHANGELOG.md when releasing a new version!**
 
+**Strongly recommended: Update `CHANGELOG.md` for any user-visible change or pull request.**
+- Add concise entries under the `[Unreleased]` section using the standard categories (Added/Changed/Fixed/etc.).
+- Keep entries focused on behavior users can observe (new flags, output changes, config behavior, bug fixes).
+- This makes it easy to move items into the next version section at release time.
+
 1. Update `CHANGELOG.md`:
    - Move items from `[Unreleased]` section to new version section with date
    - Use proper categories: Added, Changed, Deprecated, Removed, Fixed, Security
