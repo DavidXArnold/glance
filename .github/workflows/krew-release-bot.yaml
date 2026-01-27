@@ -1,0 +1,22 @@
+name: krew-release-bot
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'plugins/krew/glance.yaml'
+
+jobs:
+  krew-release-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run krew-release-bot
+        uses: rajatjindal/krew-release-bot@v0.0.46
+        with:
+          # We reuse the manifest that GitLab CI already updates with the
+          # correct version and checksums on each tagged release.
+          krew_template_file: plugins/krew/glance.yaml
