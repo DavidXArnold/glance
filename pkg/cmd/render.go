@@ -41,6 +41,9 @@ const (
 	minBoxWidth     = 60
 	maxBoxWidth     = 120
 	defaultBoxWidth = 80
+
+	outputFormatJSON   = "json"
+	outputFormatPretty = "pretty"
 )
 
 const ctlC = "<C-c>"
@@ -100,9 +103,9 @@ func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory bool, sho
 
 func render(nm *core.NodeMap, c *core.Totals) error {
 	switch viper.GetString("output") {
-	case "json":
+	case outputFormatJSON:
 		return renderJSON(nm, c)
-	case "pretty":
+	case outputFormatPretty:
 		return renderPretty(nm, c)
 	case "chart":
 		return chart(nm)
@@ -119,7 +122,7 @@ func render(nm *core.NodeMap, c *core.Totals) error {
 // renderPodsStatic renders pod summaries according to the global output format.
 func renderPodsStatic(rows []PodSummaryRow) error {
 	output := viper.GetString("output")
-	if output == "json" {
+	if output == outputFormatJSON {
 		b, err := json.MarshalIndent(rows, "", "\t")
 		if err != nil {
 			log.Errorf("failed to marshal pods to JSON: %v", err)
@@ -132,7 +135,7 @@ func renderPodsStatic(rows []PodSummaryRow) error {
 	// txt/pretty: use a simple table. We treat both the same for now.
 	t := pt.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	if output == "pretty" {
+	if output == outputFormatPretty {
 		t.SetStyle(pt.StyleRounded)
 	} else {
 		t.SetStyle(pt.StyleLight)
@@ -177,7 +180,7 @@ func renderPodsStatic(rows []PodSummaryRow) error {
 // renderDeploymentsStatic renders deployment summaries according to the global output format.
 func renderDeploymentsStatic(rows []DeploymentSummaryRow) error {
 	output := viper.GetString("output")
-	if output == "json" {
+	if output == outputFormatJSON {
 		b, err := json.MarshalIndent(rows, "", "\t")
 		if err != nil {
 			log.Errorf("failed to marshal deployments to JSON: %v", err)
@@ -189,7 +192,7 @@ func renderDeploymentsStatic(rows []DeploymentSummaryRow) error {
 
 	t := pt.NewWriter()
 	t.SetOutputMirror(os.Stdout)
-	if output == "pretty" {
+	if output == outputFormatPretty {
 		t.SetStyle(pt.StyleRounded)
 	} else {
 		t.SetStyle(pt.StyleLight)

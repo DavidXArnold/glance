@@ -72,7 +72,8 @@ func CollectPodStats(
 	// Try to fetch metrics for the same namespace; failure is logged but not fatal.
 	var podMetricsList *metricsv1beta1.PodMetricsList
 	if metricsClient != nil {
-		podMetricsList, err = metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{ResourceVersion: "0"})
+		listOpts := metav1.ListOptions{ResourceVersion: "0"}
+		podMetricsList, err = metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, listOpts)
 		if err != nil {
 			log.Debugf("Failed to fetch pod metrics for namespace %s: %v", namespace, err)
 		}
