@@ -116,6 +116,121 @@ func render(nm *core.NodeMap, c *core.Totals) error {
 	}
 }
 
+// renderPodsStatic renders pod summaries according to the global output format.
+func renderPodsStatic(rows []PodSummaryRow) error {
+	output := viper.GetString("output")
+	if output == "json" {
+		b, err := json.MarshalIndent(rows, "", "\t")
+		if err != nil {
+			log.Errorf("failed to marshal pods to JSON: %v", err)
+			return fmt.Errorf("failed to render pods JSON output: %w", err)
+		}
+		fmt.Println(string(b))
+		return nil
+	}
+
+	// txt/pretty: use a simple table. We treat both the same for now.
+	t := pt.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	if output == "pretty" {
+		t.SetStyle(pt.StyleRounded)
+	} else {
+		t.SetStyle(pt.StyleLight)
+	}
+
+	t.AppendHeader(pt.Row{
+		"NAMESPACE",
+		"POD",
+		"CPU REQUESTS/LIMITS",
+		"CPU USAGE/LIMITS",
+		"MEMORY REQUESTS/LIMITS",
+		"MEMORY USAGE/LIMITS",
+		"STATUS",
+	})
+
+	showRaw := viper.GetBool("show-raw") || viper.GetBool("exact")
+
+	for _, r := range rows {
+		cpuReq := r.CPUReq
+		cpuLimit := r.CPULimit
+		cpuUsage := r.CPUUsage
+		memReq := r.MemReq
+		memLimit := r.MemLimit
+		memUsage := r.MemUsage
+
+		row := pt.Row{
+			r.Namespace,
+			r.Name,
+			formatResourceRatio(cpuReq, cpuLimit, false, showRaw),
+			formatResourceRatio(cpuUsage, cpuLimit, false, showRaw),
+			formatResourceRatio(memReq, memLimit, true, showRaw),
+			formatResourceRatio(memUsage, memLimit, true, showRaw),
+			r.Status,
+		}
+		t.AppendRow(row)
+	}
+
+	t.Render()
+	return nil
+}
+
+// renderDeploymentsStatic renders deployment summaries according to the global output format.
+func renderDeploymentsStatic(rows []DeploymentSummaryRow) error {
+	output := viper.GetString("output")
+	if output == "json" {
+		b, err := json.MarshalIndent(rows, "", "\t")
+		if err != nil {
+			log.Errorf("failed to marshal deployments to JSON: %v", err)
+			return fmt.Errorf("failed to render deployments JSON output: %w", err)
+		}
+		fmt.Println(string(b))
+		return nil
+	}
+
+	t := pt.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	if output == "pretty" {
+		t.SetStyle(pt.StyleRounded)
+	} else {
+		t.SetStyle(pt.StyleLight)
+	}
+
+	t.AppendHeader(pt.Row{
+		"NAMESPACE",
+		"DEPLOYMENT",
+		"STATUS",
+		"CPU REQUESTS/LIMITS",
+		"MEMORY REQUESTS/LIMITS",
+		"REPLICAS",
+		"READY",
+		"AVAILABLE",
+	})
+
+	showRaw := viper.GetBool("show-raw") || viper.GetBool("exact")
+
+	for _, r := range rows {
+		cpuReq := r.CPUReq
+		cpuLimit := r.CPULimit
+		memReq := r.MemReq
+		memLimit := r.MemLimit
+
+		row := pt.Row{
+			r.Namespace,
+			r.Name,
+			r.Status,
+			formatResourceRatio(cpuReq, cpuLimit, false, showRaw),
+			formatResourceRatio(memReq, memLimit, true, showRaw),
+			fmt.Sprintf("%d", r.Replicas),
+			fmt.Sprintf("%d", r.Ready),
+			fmt.Sprintf("%d", r.Available),
+		}
+		t.AppendRow(row)
+	}
+
+	t.Render()
+	return nil
+}
+
 func renderJSON(nm *core.NodeMap, c *core.Totals) error {
 	snapshot := core.NewSnapshot(*nm, *c)
 	g, err := json.MarshalIndent(snapshot, "", "\t")

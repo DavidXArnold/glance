@@ -168,9 +168,22 @@ When releasing:
 5. Update README.md examples
 
 ### Adding a new CLI flag
-1. Add flag in `pkg/cmd/glance.go` `NewGlanceCmd()` function
-2. Bind to viper if needed for config file support
-3. Update help text and README.md
+1. Add flag in `pkg/cmd/glance.go` `NewGlanceCmd()` function (or in the relevant subcommand file such as `pods.go` or `live.go`).
+2. Bind to viper if needed for config file support.
+3. Update help text and README.md.
+
+### Adding a new static view (e.g., pods or deployments)
+1. Implement shared aggregation helpers in `pkg/cmd/stats.go` so both static and live paths stay in sync.
+2. Add a new subcommand file (for example, `pkg/cmd/pods.go` or `pkg/cmd/deployments.go`) that:
+   - Resolves REST config via `gc.configFlags.ToRESTConfig()`.
+   - Creates Kubernetes and (optionally) metrics clients.
+   - Uses `getLabelSelector()` and kubeconfig namespace to scope the query.
+   - Calls the appropriate `Collect*Stats` helper.
+   - Sorts results deterministically (namespace, then name) and delegates to a renderer in `render.go`.
+3. Add static renderers to `pkg/cmd/render.go` that:
+   - Support `-o txt`, `-o pretty`, and `-o json`.
+   - Reuse `formatResourceRatio` / `formatMilliCPU` / `formatBytes` to match live formatting.
+4. Document the new commands in `README.md` (usage examples, CLI reference) and add an entry under `[Unreleased]` in `CHANGELOG.md`.
 
 ### Adding cloud provider support
 1. Create new file `pkg/cmd/<provider>.go`
