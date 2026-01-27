@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-01-27
+
+### Changed
+- Documented Krew release flow and added GitHub krew-release-bot workflow for automated krew-index PRs.
+
 ## [0.2.3] - 2026-01-27
 
 ### Added
