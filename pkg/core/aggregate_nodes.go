@@ -38,6 +38,10 @@ func ComputeNodeSnapshot(
 		TotalAllocatedCPULimits:      resource.NewMilliQuantity(0, resource.DecimalSI),
 		TotalAllocatedMemoryRequests: resource.NewQuantity(0, resource.BinarySI),
 		TotalAllocatedMemoryLimits:   resource.NewQuantity(0, resource.BinarySI),
+		TotalAllocatableGPU:          resource.NewQuantity(0, resource.DecimalSI),
+		TotalCapacityGPU:             resource.NewQuantity(0, resource.DecimalSI),
+		TotalAllocatedGPURequests:    resource.NewQuantity(0, resource.DecimalSI),
+		TotalAllocatedGPULimits:      resource.NewQuantity(0, resource.DecimalSI),
 		TotalUsageCPU:                resource.NewMilliQuantity(0, resource.DecimalSI),
 		TotalUsageMemory:             resource.NewQuantity(0, resource.BinarySI),
 	}
@@ -76,93 +80,152 @@ func ComputeNodeSnapshot(
 		// Copy node info.
 		stats.NodeInfo = node.Status.NodeInfo
 
-		// Allocatable and capacity resources.
-		if cpu := node.Status.Allocatable.Cpu(); cpu != nil {
-			q := cpu.DeepCopy()
-			stats.AllocatableCPU = &q
-		}
-		if mem := node.Status.Allocatable.Memory(); mem != nil {
-			q := mem.DeepCopy()
-			stats.AllocatableMemory = &q
-		}
-		if cpu := node.Status.Capacity.Cpu(); cpu != nil {
-			q := cpu.DeepCopy()
-			stats.CapacityCPU = &q
-		}
-		if mem := node.Status.Capacity.Memory(); mem != nil {
-			q := mem.DeepCopy()
-			stats.CapacityMemory = &q
-		}
-
-		// Aggregate pod-level requests/limits from the pods scheduled on this node.
-		pods := podsByNode[name]
-		stats.PodCount = len(pods)
-
-		cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
-		cpuLim := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memReq := resource.NewQuantity(0, resource.BinarySI)
-		memLim := resource.NewQuantity(0, resource.BinarySI)
-
-		for _, pod := range pods {
-			for _, container := range pod.Spec.Containers {
-				if req := container.Resources.Requests.Cpu(); req != nil {
-					cpuReq.Add(*req)
-				}
-				if lim := container.Resources.Limits.Cpu(); lim != nil {
-					cpuLim.Add(*lim)
-				}
-				if req := container.Resources.Requests.Memory(); req != nil {
-					memReq.Add(*req)
-				}
-				if lim := container.Resources.Limits.Memory(); lim != nil {
-					memLim.Add(*lim)
-				}
-			}
-		}
-
-		stats.AllocatedCPUrequests = *cpuReq
-		stats.AllocatedCPULimits = *cpuLim
-		stats.AllocatedMemoryRequests = *memReq
-		stats.AllocatedMemoryLimits = *memLim
-
-		// Update totals with allocatable, capacity, and allocated values.
-		if stats.AllocatableCPU != nil {
-			totals.TotalAllocatableCPU.Add(*stats.AllocatableCPU)
-		}
-		if stats.AllocatableMemory != nil {
-			totals.TotalAllocatableMemory.Add(*stats.AllocatableMemory)
-		}
-		if stats.CapacityCPU != nil {
-			totals.TotalCapacityCPU.Add(*stats.CapacityCPU)
-		}
-		if stats.CapacityMemory != nil {
-			totals.TotalCapacityMemory.Add(*stats.CapacityMemory)
-		}
-
-		totals.TotalAllocatedCPUrequests.Add(stats.AllocatedCPUrequests)
-		totals.TotalAllocatedCPULimits.Add(stats.AllocatedCPULimits)
-		totals.TotalAllocatedMemoryRequests.Add(stats.AllocatedMemoryRequests)
-		totals.TotalAllocatedMemoryLimits.Add(stats.AllocatedMemoryLimits)
-
-		// Usage from metrics-server. If metrics are missing for a Ready node,
-		// treat usage as unknown (zero) but do not fail the snapshot. This
-		// avoids hard failures during scale up/down when metrics-server has not
-		// yet scraped new nodes.
-		if m := nodeMetrics[name]; m != nil {
-			if cpuQty, ok := m.Usage[v1.ResourceCPU]; ok {
-				q := cpuQty.DeepCopy()
-				stats.UsageCPU = &q
-				totals.TotalUsageCPU.Add(*stats.UsageCPU)
-			}
-			if memQty, ok := m.Usage[v1.ResourceMemory]; ok {
-				q := memQty.DeepCopy()
-				stats.UsageMemory = &q
-				totals.TotalUsageMemory.Add(*stats.UsageMemory)
-			}
-		}
+		populateNodeResources(stats, &node)
+		aggregatePodResources(stats, podsByNode[name])
+		applyNodeMetrics(stats, nodeMetrics[name])
+		accumulateTotals(&totals, stats)
 
 		nm[name] = stats
 	}
 
 	return nm, totals, nil
+}
+
+// populateNodeResources fills allocatable, capacity, and GPU fields on stats from node status.
+func populateNodeResources(stats *NodeStats, node *v1.Node) {
+	if cpu := node.Status.Allocatable.Cpu(); cpu != nil {
+		q := cpu.DeepCopy()
+		stats.AllocatableCPU = &q
+	}
+	if mem := node.Status.Allocatable.Memory(); mem != nil {
+		q := mem.DeepCopy()
+		stats.AllocatableMemory = &q
+	}
+	if cpu := node.Status.Capacity.Cpu(); cpu != nil {
+		q := cpu.DeepCopy()
+		stats.CapacityCPU = &q
+	}
+	if mem := node.Status.Capacity.Memory(); mem != nil {
+		q := mem.DeepCopy()
+		stats.CapacityMemory = &q
+	}
+
+	// GPU allocatable and capacity – scan all extended resources.
+	gpuAllocatable := resource.NewQuantity(0, resource.DecimalSI)
+	for rName, qty := range node.Status.Allocatable {
+		if IsGPUResource(rName) {
+			gpuAllocatable.Add(qty)
+		}
+	}
+	if !gpuAllocatable.IsZero() {
+		stats.AllocatableGPU = gpuAllocatable
+	}
+
+	gpuCapacity := resource.NewQuantity(0, resource.DecimalSI)
+	for rName, qty := range node.Status.Capacity {
+		if IsGPUResource(rName) {
+			gpuCapacity.Add(qty)
+		}
+	}
+	if !gpuCapacity.IsZero() {
+		stats.CapacityGPU = gpuCapacity
+	}
+}
+
+// aggregatePodResources sums CPU, memory, and GPU requests/limits from all pods into stats.
+func aggregatePodResources(stats *NodeStats, pods []v1.Pod) {
+	stats.PodCount = len(pods)
+
+	cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
+	cpuLim := resource.NewMilliQuantity(0, resource.DecimalSI)
+	memReq := resource.NewQuantity(0, resource.BinarySI)
+	memLim := resource.NewQuantity(0, resource.BinarySI)
+	gpuReq := resource.NewQuantity(0, resource.DecimalSI)
+	gpuLim := resource.NewQuantity(0, resource.DecimalSI)
+
+	for _, pod := range pods {
+		for _, container := range pod.Spec.Containers {
+			if req := container.Resources.Requests.Cpu(); req != nil {
+				cpuReq.Add(*req)
+			}
+			if lim := container.Resources.Limits.Cpu(); lim != nil {
+				cpuLim.Add(*lim)
+			}
+			if req := container.Resources.Requests.Memory(); req != nil {
+				memReq.Add(*req)
+			}
+			if lim := container.Resources.Limits.Memory(); lim != nil {
+				memLim.Add(*lim)
+			}
+			for rName, qty := range container.Resources.Requests {
+				if IsGPUResource(rName) {
+					gpuReq.Add(qty)
+				}
+			}
+			for rName, qty := range container.Resources.Limits {
+				if IsGPUResource(rName) {
+					gpuLim.Add(qty)
+				}
+			}
+		}
+	}
+
+	stats.AllocatedCPUrequests = *cpuReq
+	stats.AllocatedCPULimits = *cpuLim
+	stats.AllocatedMemoryRequests = *memReq
+	stats.AllocatedMemoryLimits = *memLim
+	stats.AllocatedGPURequests = *gpuReq
+	stats.AllocatedGPULimits = *gpuLim
+}
+
+// applyNodeMetrics records usage metrics from the metrics-server onto stats.
+func applyNodeMetrics(stats *NodeStats, m *metricsV1beta1api.NodeMetrics) {
+	if m == nil {
+		return
+	}
+	if cpuQty, ok := m.Usage[v1.ResourceCPU]; ok {
+		q := cpuQty.DeepCopy()
+		stats.UsageCPU = &q
+	}
+	if memQty, ok := m.Usage[v1.ResourceMemory]; ok {
+		q := memQty.DeepCopy()
+		stats.UsageMemory = &q
+	}
+}
+
+// accumulateTotals adds a single node's stats into the running totals.
+func accumulateTotals(totals *Totals, stats *NodeStats) {
+	if stats.AllocatableCPU != nil {
+		totals.TotalAllocatableCPU.Add(*stats.AllocatableCPU)
+	}
+	if stats.AllocatableMemory != nil {
+		totals.TotalAllocatableMemory.Add(*stats.AllocatableMemory)
+	}
+	if stats.CapacityCPU != nil {
+		totals.TotalCapacityCPU.Add(*stats.CapacityCPU)
+	}
+	if stats.CapacityMemory != nil {
+		totals.TotalCapacityMemory.Add(*stats.CapacityMemory)
+	}
+
+	totals.TotalAllocatedCPUrequests.Add(stats.AllocatedCPUrequests)
+	totals.TotalAllocatedCPULimits.Add(stats.AllocatedCPULimits)
+	totals.TotalAllocatedMemoryRequests.Add(stats.AllocatedMemoryRequests)
+	totals.TotalAllocatedMemoryLimits.Add(stats.AllocatedMemoryLimits)
+
+	if stats.AllocatableGPU != nil {
+		totals.TotalAllocatableGPU.Add(*stats.AllocatableGPU)
+	}
+	if stats.CapacityGPU != nil {
+		totals.TotalCapacityGPU.Add(*stats.CapacityGPU)
+	}
+	totals.TotalAllocatedGPURequests.Add(stats.AllocatedGPURequests)
+	totals.TotalAllocatedGPULimits.Add(stats.AllocatedGPULimits)
+
+	if stats.UsageCPU != nil {
+		totals.TotalUsageCPU.Add(*stats.UsageCPU)
+	}
+	if stats.UsageMemory != nil {
+		totals.TotalUsageMemory.Add(*stats.UsageMemory)
+	}
 }

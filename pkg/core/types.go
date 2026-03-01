@@ -16,6 +16,7 @@ limitations under the License.
 package core
 
 import (
+	"strings"
 	"time"
 
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
@@ -23,6 +24,22 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+// Well-known GPU extended resource names.
+const (
+	ResourceNvidiaGPU v1.ResourceName = "nvidia.com/gpu"
+	ResourceAMDGPU    v1.ResourceName = "amd.com/gpu"
+)
+
+// IsGPUResource returns true if the resource name represents a GPU device.
+// It recognises nvidia.com/gpu and amd.com/gpu as well as any resource whose
+// name contains "/gpu" (e.g. intel.com/gpu) for forward compatibility.
+func IsGPUResource(name v1.ResourceName) bool {
+	if name == ResourceNvidiaGPU || name == ResourceAMDGPU {
+		return true
+	}
+	return strings.HasSuffix(string(name), "/gpu")
+}
 
 // NodeStats holds relevant node statistics including resource allocation and usage.
 type NodeStats struct {
@@ -44,6 +61,10 @@ type NodeStats struct {
 	AllocatedCPULimits      resource.Quantity   `json:",omitempty"`
 	AllocatedMemoryRequests resource.Quantity   `json:",omitempty"`
 	AllocatedMemoryLimits   resource.Quantity   `json:",omitempty"`
+	AllocatableGPU          *resource.Quantity  `json:",omitempty"`
+	CapacityGPU             *resource.Quantity  `json:",omitempty"`
+	AllocatedGPURequests    resource.Quantity   `json:",omitempty"`
+	AllocatedGPULimits      resource.Quantity   `json:",omitempty"`
 	UsageCPU                *resource.Quantity  `json:",omitempty"`
 	UsageMemory             *resource.Quantity  `json:",omitempty"`
 	PodInfo                 map[string]*PodInfo `json:",omitempty"`
@@ -87,6 +108,10 @@ type Totals struct {
 	TotalAllocatedCPULimits      *resource.Quantity `json:",omitempty"`
 	TotalAllocatedMemoryRequests *resource.Quantity `json:",omitempty"`
 	TotalAllocatedMemoryLimits   *resource.Quantity `json:",omitempty"`
+	TotalAllocatableGPU          *resource.Quantity `json:",omitempty"`
+	TotalCapacityGPU             *resource.Quantity `json:",omitempty"`
+	TotalAllocatedGPURequests    *resource.Quantity `json:",omitempty"`
+	TotalAllocatedGPULimits      *resource.Quantity `json:",omitempty"`
 	TotalUsageCPU                *resource.Quantity `json:",omitempty"`
 	TotalUsageMemory             *resource.Quantity `json:",omitempty"`
 }

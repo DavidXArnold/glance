@@ -11,6 +11,7 @@ import (
 	"context"
 
 	log "github.com/sirupsen/logrus"
+	core "gitlab.com/davidxarnold/glance/pkg/core"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +31,8 @@ type PodSummaryRow struct {
 	MemReq    *resource.Quantity
 	MemLimit  *resource.Quantity
 	MemUsage  *resource.Quantity
+	GPUReq    *resource.Quantity
+	GPULimit  *resource.Quantity
 	Status    string
 }
 
@@ -44,6 +47,8 @@ type DeploymentSummaryRow struct {
 	CPULimit  *resource.Quantity
 	MemReq    *resource.Quantity
 	MemLimit  *resource.Quantity
+	GPUReq    *resource.Quantity
+	GPULimit  *resource.Quantity
 	Status    string
 }
 
@@ -51,7 +56,7 @@ type DeploymentSummaryRow struct {
 // It is a shared helper used by both static pod views and the live TUI.
 func CollectPodStats(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
+	k8sClient kubernetes.Interface,
 	metricsClient metricsclientset.Interface,
 	namespace string,
 	selector labels.Selector,
@@ -99,6 +104,9 @@ func CollectPodStats(
 		cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
 		memUsage := resource.NewQuantity(0, resource.BinarySI)
 
+		gpuReq := resource.NewQuantity(0, resource.DecimalSI)
+		gpuLimit := resource.NewQuantity(0, resource.DecimalSI)
+
 		for _, container := range pod.Spec.Containers {
 			if req := container.Resources.Requests.Cpu(); req != nil {
 				cpuReq.Add(*req)
@@ -111,6 +119,16 @@ func CollectPodStats(
 			}
 			if lim := container.Resources.Limits.Memory(); lim != nil {
 				memLimit.Add(*lim)
+			}
+			for rName, qty := range container.Resources.Requests {
+				if core.IsGPUResource(rName) {
+					gpuReq.Add(qty)
+				}
+			}
+			for rName, qty := range container.Resources.Limits {
+				if core.IsGPUResource(rName) {
+					gpuLimit.Add(qty)
+				}
 			}
 		}
 
@@ -132,6 +150,8 @@ func CollectPodStats(
 			MemReq:    memReq,
 			MemLimit:  memLimit,
 			MemUsage:  memUsage,
+			GPUReq:    gpuReq,
+			GPULimit:  gpuLimit,
 			Status:    status,
 		}
 
@@ -145,7 +165,7 @@ func CollectPodStats(
 // It mirrors the logic in fetchDeploymentData but is usable from non-TUI contexts.
 func CollectDeploymentStats(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
+	k8sClient kubernetes.Interface,
 	namespace string,
 	selector labels.Selector,
 ) ([]DeploymentSummaryRow, error) {
@@ -170,6 +190,8 @@ func CollectDeploymentStats(
 		cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
 		memReq := resource.NewQuantity(0, resource.BinarySI)
 		memLimit := resource.NewQuantity(0, resource.BinarySI)
+		gpuReq := resource.NewQuantity(0, resource.DecimalSI)
+		gpuLimit := resource.NewQuantity(0, resource.DecimalSI)
 
 		for _, container := range deploy.Spec.Template.Spec.Containers {
 			if req := container.Resources.Requests.Cpu(); req != nil {
@@ -184,6 +206,16 @@ func CollectDeploymentStats(
 			if lim := container.Resources.Limits.Memory(); lim != nil {
 				memLimit.Add(*lim)
 			}
+			for rName, qty := range container.Resources.Requests {
+				if core.IsGPUResource(rName) {
+					gpuReq.Add(qty)
+				}
+			}
+			for rName, qty := range container.Resources.Limits {
+				if core.IsGPUResource(rName) {
+					gpuLimit.Add(qty)
+				}
+			}
 		}
 
 		replicas := int32(1)
@@ -195,6 +227,8 @@ func CollectDeploymentStats(
 		cpuLimit = multiplyQuantity(cpuLimit, int(replicas))
 		memReq = multiplyQuantity(memReq, int(replicas))
 		memLimit = multiplyQuantity(memLimit, int(replicas))
+		gpuReq = multiplyQuantity(gpuReq, int(replicas))
+		gpuLimit = multiplyQuantity(gpuLimit, int(replicas))
 
 		status := statusReady + " " + nodeStatusReady
 		if deploy.Status.ReadyReplicas < replicas {
@@ -215,6 +249,8 @@ func CollectDeploymentStats(
 			CPULimit:  cpuLimit,
 			MemReq:    memReq,
 			MemLimit:  memLimit,
+			GPUReq:    gpuReq,
+			GPULimit:  gpuLimit,
 			Status:    status,
 		}
 

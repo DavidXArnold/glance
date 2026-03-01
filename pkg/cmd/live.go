@@ -116,6 +116,7 @@ type LiveState struct {
 	showPercentages        bool
 	compactMode            bool
 	showRawResources       bool   // Toggle between ratio format and raw resource values
+	showGPU                bool   // Toggle GPU resource columns
 	showCloudInfo          bool   // Toggle cloud provider information display
 	showNodeVersion        bool   // Toggle node version display
 	showNodeAge            bool   // Toggle node age display
@@ -153,6 +154,7 @@ type LiveState struct {
 	pendingShowNodeVersion  bool
 	pendingShowNodeAge      bool
 	pendingShowNodeGroup    bool
+	pendingShowGPU          bool
 	pendingFilterNodeGroup  string
 	pendingFilterCapacity   string
 	pendingSortMode         SortMode
@@ -312,6 +314,7 @@ func runLive(
 		maxConcurrent:          maxConcurrent,
 		sortMode:               sortMode,
 		cloudCache:             cloud.NewCache(viper.GetDuration("cloud-cache-ttl"), viper.GetBool("cloud-cache-disk")),
+		showGPU:                viper.GetBool("show-gpu"),
 		showCloudInfo:          viper.GetBool("show-cloud-provider"),
 		showNodeVersion:        viper.GetBool("show-node-version"),
 		showNodeAge:            viper.GetBool("show-node-age"),
@@ -367,7 +370,7 @@ func runLive(
 
 	state.menuBar.Border = false
 	state.menuBar.Text = " Views: [o]Nodes [n]Namespaces [p]Pods [d]Deployments | " +
-		"Toggle: [b]Bars [%]Percent [r]Raw [w]Cloud [v]Version [a]Age [g]Group\n" +
+		"Toggle: [b]Bars [%]Percent [r]Raw [u]GPU [w]Cloud [v]Version [a]Age [g]Group\n" +
 		" Sort: [1]Status [2]Name [3]CPU [4]Memory | [?]Settings [q]Quit"
 	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
 
@@ -453,6 +456,10 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 	case "r":
 		state.showRawResources = !state.showRawResources
 		viper.Set("show-raw-resources", state.showRawResources)
+		writeConfigSafe()
+	case "u":
+		state.showGPU = !state.showGPU
+		viper.Set("show-gpu", state.showGPU)
 		writeConfigSafe()
 	case "w":
 		state.showCloudInfo = !state.showCloudInfo
@@ -602,6 +609,8 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 				baseColCount++
 			}
 		}
+		// GPU column comes after resource columns but before cloud, so we
+		// don't add it to baseColCount (it IS a resource column).
 		data = addProgressBars(data, metrics, state.showPercentages, baseColCount, state.mode)
 	}
 
@@ -974,6 +983,9 @@ func fetchNamespaceData(
 		"MEMORY USAGE/LIMITS",
 		"PODS",
 	}
+	if state.showGPU {
+		header = append(header, "GPU REQ/LIMIT")
+	}
 
 	// Use watch cache for faster response
 	namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
@@ -1047,72 +1059,9 @@ func fetchNamespaceData(
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
-			cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
-			memReq := resource.NewQuantity(0, resource.BinarySI)
-			memLimit := resource.NewQuantity(0, resource.BinarySI)
-			cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
-			memUsage := resource.NewQuantity(0, resource.BinarySI)
-
-			pods := podsByNS[ns.Name]
-			podCount := len(pods)
-
-			for _, pod := range pods {
-				for _, container := range pod.Spec.Containers {
-					if req := container.Resources.Requests.Cpu(); req != nil {
-						cpuReq.Add(*req)
-					}
-					if lim := container.Resources.Limits.Cpu(); lim != nil {
-						cpuLimit.Add(*lim)
-					}
-					if req := container.Resources.Requests.Memory(); req != nil {
-						memReq.Add(*req)
-					}
-					if lim := container.Resources.Limits.Memory(); lim != nil {
-						memLimit.Add(*lim)
-					}
-				}
-
-				// Get metrics for this pod
-				key := pod.Namespace + "/" + pod.Name
-				if pm, ok := metricsByPod[key]; ok {
-					for _, container := range pm.Containers {
-						cpuUsage.Add(container.Usage[v1.ResourceCPU])
-						memUsage.Add(container.Usage[v1.ResourceMemory])
-					}
-				}
-			}
-
-			cpuUsagePct := float64(0)
-			if cpuLimit.MilliValue() > 0 {
-				cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuLimit.MilliValue()) * 100
-			}
-
-			row := []string{
-				ns.Name,
-				formatResourceRatio(cpuReq, cpuLimit, false, state.showRawResources),
-				formatResourceRatio(cpuUsage, cpuLimit, false, state.showRawResources),
-				formatResourceRatio(memReq, memLimit, true, state.showRawResources),
-				formatResourceRatio(memUsage, memLimit, true, state.showRawResources),
-				fmt.Sprintf("%d", podCount),
-			}
-
-			metrics := ResourceMetrics{
-				CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
-				CPULimit:    float64(cpuLimit.MilliValue()) / 1000.0,
-				CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
-				CPUCapacity: float64(cpuLimit.MilliValue()) / 1000.0,
-				MemRequest:  float64(memReq.Value()),
-				MemLimit:    float64(memLimit.Value()),
-				MemUsage:    float64(memUsage.Value()),
-				MemCapacity: float64(memLimit.Value()),
-			}
-
-			nsData[idx] = nsRowData{
-				row:      row,
-				metrics:  metrics,
-				cpuUsage: cpuUsagePct,
-			}
+			nsData[idx] = processNamespacePods(
+				ns.Name, podsByNS[ns.Name], metricsByPod, state,
+			)
 		}(i, ns)
 	}
 	wg.Wait()
@@ -1155,6 +1104,96 @@ func fetchNamespaceData(
 	return header, rows, metrics, nil
 }
 
+// processNamespacePods aggregates resource usage for all pods in a single namespace.
+func processNamespacePods(
+	nsName string,
+	pods []v1.Pod,
+	metricsByPod map[string]*metricsV1beta1api.PodMetrics,
+	state *LiveState,
+) nsRowData {
+	cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
+	cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
+	memReq := resource.NewQuantity(0, resource.BinarySI)
+	memLimit := resource.NewQuantity(0, resource.BinarySI)
+	cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
+	memUsage := resource.NewQuantity(0, resource.BinarySI)
+	gpuReq := resource.NewQuantity(0, resource.DecimalSI)
+	gpuLimit := resource.NewQuantity(0, resource.DecimalSI)
+
+	for _, pod := range pods {
+		for _, container := range pod.Spec.Containers {
+			if req := container.Resources.Requests.Cpu(); req != nil {
+				cpuReq.Add(*req)
+			}
+			if lim := container.Resources.Limits.Cpu(); lim != nil {
+				cpuLimit.Add(*lim)
+			}
+			if req := container.Resources.Requests.Memory(); req != nil {
+				memReq.Add(*req)
+			}
+			if lim := container.Resources.Limits.Memory(); lim != nil {
+				memLimit.Add(*lim)
+			}
+			for rName, qty := range container.Resources.Requests {
+				if core.IsGPUResource(rName) {
+					gpuReq.Add(qty)
+				}
+			}
+			for rName, qty := range container.Resources.Limits {
+				if core.IsGPUResource(rName) {
+					gpuLimit.Add(qty)
+				}
+			}
+		}
+
+		key := pod.Namespace + "/" + pod.Name
+		if pm, ok := metricsByPod[key]; ok {
+			for _, container := range pm.Containers {
+				cpuUsage.Add(container.Usage[v1.ResourceCPU])
+				memUsage.Add(container.Usage[v1.ResourceMemory])
+			}
+		}
+	}
+
+	cpuUsagePct := float64(0)
+	if cpuLimit.MilliValue() > 0 {
+		cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuLimit.MilliValue()) * 100
+	}
+
+	row := []string{
+		nsName,
+		formatResourceRatio(cpuReq, cpuLimit, false, state.showRawResources),
+		formatResourceRatio(cpuUsage, cpuLimit, false, state.showRawResources),
+		formatResourceRatio(memReq, memLimit, true, state.showRawResources),
+		formatResourceRatio(memUsage, memLimit, true, state.showRawResources),
+		fmt.Sprintf("%d", len(pods)),
+	}
+	if state.showGPU {
+		if gpuReq.Value() > 0 || gpuLimit.Value() > 0 {
+			row = append(row, fmt.Sprintf("%d / %d", gpuReq.Value(), gpuLimit.Value()))
+		} else {
+			row = append(row, "—")
+		}
+	}
+
+	metrics := ResourceMetrics{
+		CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
+		CPULimit:    float64(cpuLimit.MilliValue()) / 1000.0,
+		CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
+		CPUCapacity: float64(cpuLimit.MilliValue()) / 1000.0,
+		MemRequest:  float64(memReq.Value()),
+		MemLimit:    float64(memLimit.Value()),
+		MemUsage:    float64(memUsage.Value()),
+		MemCapacity: float64(memLimit.Value()),
+	}
+
+	return nsRowData{
+		row:      row,
+		metrics:  metrics,
+		cpuUsage: cpuUsagePct,
+	}
+}
+
 // podRowData holds data for a single pod row for sorting and limiting.
 type podRowData struct {
 	row       []string
@@ -1178,6 +1217,10 @@ func fetchPodData(
 		"MEMORY REQUESTS/LIMITS",
 		"MEMORY USAGE/LIMITS",
 		"STATUS",
+	}
+	if state.showGPU {
+		// Insert GPU column before STATUS
+		header = append(header[:len(header)-1], "GPU REQ/LIMIT", header[len(header)-1])
 	}
 
 	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
@@ -1224,8 +1267,19 @@ func fetchPodData(
 			formatResourceRatio(cpuUsage, cpuLimit, false, state.showRawResources),
 			formatResourceRatio(memReq, memLimit, true, state.showRawResources),
 			formatResourceRatio(memUsage, memLimit, true, state.showRawResources),
-			statusIcon + podStatus,
 		}
+		if state.showGPU {
+			if ps.GPUReq != nil && ps.GPUReq.Value() > 0 {
+				gpuLimVal := int64(0)
+				if ps.GPULimit != nil {
+					gpuLimVal = ps.GPULimit.Value()
+				}
+				row = append(row, fmt.Sprintf("%d / %d", ps.GPUReq.Value(), gpuLimVal))
+			} else {
+				row = append(row, "—")
+			}
+		}
+		row = append(row, statusIcon+podStatus)
 
 		metrics := ResourceMetrics{
 			CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
@@ -1326,6 +1380,10 @@ func buildNodeHeader(state *LiveState) []string {
 		"MEMORY USAGE/CAPACITY",
 		"PODS",
 	)
+
+	if state.showGPU {
+		header = append(header, "GPU REQ/ALLOC")
+	}
 
 	if state.showCloudInfo {
 		header = append(header, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
@@ -1452,6 +1510,20 @@ func processNodeRow(
 		formatResourceRatio(&memUsage, memCap, true, state.showRawResources),
 		fmt.Sprintf("%d", podCount),
 	)
+
+	// GPU columns (only when toggled on)
+	if state.showGPU {
+		gpuReq := stats.AllocatedGPURequests.Value()
+		gpuAlloc := int64(0)
+		if stats.AllocatableGPU != nil {
+			gpuAlloc = stats.AllocatableGPU.Value()
+		}
+		if gpuAlloc > 0 {
+			row = append(row, fmt.Sprintf("%d / %d", gpuReq, gpuAlloc))
+		} else {
+			row = append(row, "—")
+		}
+	}
 
 	metrics := ResourceMetrics{
 		CPURequest:  float64(cpuAlloc.MilliValue()) / 1000.0,
@@ -2184,6 +2256,7 @@ func initPendingState(state *LiveState) {
 	state.pendingShowNodeVersion = state.showNodeVersion
 	state.pendingShowNodeAge = state.showNodeAge
 	state.pendingShowNodeGroup = state.showNodeGroup
+	state.pendingShowGPU = state.showGPU
 	state.pendingFilterNodeGroup = state.filterNodeGroup
 	state.pendingFilterCapacity = state.filterCapacityType
 	state.pendingSortMode = state.sortMode
@@ -2201,6 +2274,7 @@ func applyPendingState(state *LiveState) {
 	state.showNodeVersion = state.pendingShowNodeVersion
 	state.showNodeAge = state.pendingShowNodeAge
 	state.showNodeGroup = state.pendingShowNodeGroup
+	state.showGPU = state.pendingShowGPU
 	state.filterNodeGroup = state.pendingFilterNodeGroup
 	state.filterCapacityType = state.pendingFilterCapacity
 	state.sortMode = state.pendingSortMode
@@ -2222,6 +2296,7 @@ func saveAllSettings(state *LiveState) {
 	viper.Set("show-node-version", state.showNodeVersion)
 	viper.Set("show-node-age", state.showNodeAge)
 	viper.Set("show-node-group", state.showNodeGroup)
+	viper.Set("show-gpu", state.showGPU)
 	viper.Set("filter-node-group", state.filterNodeGroup)
 	viper.Set("filter-capacity-type", state.filterCapacityType)
 	viper.Set("sort-by", getSortModeString(state.sortMode))
@@ -2263,6 +2338,7 @@ func buildSettingsRows(state *LiveState) [][]string {
 		{"", "Node Version", boolToCheckbox(state.pendingShowNodeVersion)},
 		{"", "Node Age", boolToCheckbox(state.pendingShowNodeAge)},
 		{"", "Node Group/Pool", boolToCheckbox(state.pendingShowNodeGroup)},
+		{"", "GPU Resources", boolToCheckbox(state.pendingShowGPU)},
 		{},
 		{"[Sorting](fg:cyan,mod:bold)", "", ""},
 		{"", "Sort by Status", sortModeRadio(state.pendingSortMode, SortByStatus)},
@@ -2500,6 +2576,9 @@ func toggleModalSetting(state *LiveState, row []string) {
 		state.modalDirty = true
 	case "Node Group/Pool":
 		state.pendingShowNodeGroup = !state.pendingShowNodeGroup
+		state.modalDirty = true
+	case "GPU Resources":
+		state.pendingShowGPU = !state.pendingShowGPU
 		state.modalDirty = true
 	case "Sort by Status":
 		state.pendingSortMode = SortByStatus

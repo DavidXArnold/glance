@@ -18,6 +18,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 - 🔄 **Live Monitoring** - Real-time TUI with auto-refresh for continuous observation
 - 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, and Deployments
 - 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage with ratio formatting
+- 🎮 **GPU Support** - NVIDIA, AMD, and other GPU resources with auto-detection and `--show-gpu` flag
 - ☁️ **Cloud Provider Integration** - Optional AWS/GCP node metadata columns, enabled explicitly via flags or live view toggles
 - 🔍 **Flexible Filtering** - Label and field selectors for targeted views
 - 📏 **Value Display Options** - Human-readable ratios or raw Kubernetes resource values
@@ -191,6 +192,7 @@ kubectl glance --exact
 kubectl glance --show-node-age             # add AGE column
 kubectl glance --show-node-group           # add GROUP column
 kubectl glance --show-node-version=false   # hide VERSION column
+kubectl glance --show-gpu                  # show GPU columns (auto-enabled when GPUs detected)
 
 # Combine options
 kubectl glance -c -p -o pretty --exact --show-node-age --show-node-group
@@ -264,7 +266,8 @@ At runtime in live view, use keys `1`–`4` to switch sort mode:
 || `w` | Toggle **cloud info** columns (Provider, Region, Instance Type, Capacity) |
 || `v` | Toggle **node version** column (Kubelet version) |
 || `a` | Toggle **node age** column (time since creation) |
-|| `g` | Toggle **node group/pool** column |
+||| `g` | Toggle **node group/pool** column |
+||| `u` | Toggle **GPU resource** columns (requests/allocatable) |
 || `1` | Sort by **Status** |
 || `2` | Sort by **Name** |
 || `3` | Sort by **CPU** |
@@ -589,7 +592,8 @@ kubectl glance -o json \
 ||| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
 ||| `--show-node-version` | | *unset* (treated as "show") | Control VERSION column in static output: when explicitly set to `false`, hides the VERSION column; when unset or `true`, VERSION is shown |
 ||| `--show-node-age` | | `false` | Show AGE column (node creation time) in static output |
-||| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
+|||| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
+|||| `--show-gpu` | | `false` | Show GPU resource columns (auto-enabled when GPU nodes are detected) |
 
 **Static subcommands** (`kubectl glance pods`, `kubectl glance deployments`) reuse
 these selectors and output flags, and additionally honor the global `--namespace`
@@ -662,6 +666,7 @@ cloud-cache-disk: false  # Persist cache to ~/.glance/cloud-cache.json (default:
 show-node-version: false
 show-node-age: false
 show-node-group: false
+show-gpu: false           # auto-enabled when GPU nodes detected
 ```
 
 **Cloud Cache Settings:**

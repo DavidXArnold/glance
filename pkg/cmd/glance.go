@@ -248,6 +248,11 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	cmd.PersistentFlags().BoolVar(&showNodeAge, "show-node-age", false, "Show node age column in static output")
 	cmd.PersistentFlags().BoolVar(&showNodeGroup, "show-node-group", false, "Show node group/pool column in static output")
 
+	// GPU column visibility flag
+	var showGPU bool
+	cmd.PersistentFlags().BoolVar(&showGPU, "show-gpu", false,
+		"Show GPU resource columns. Auto-enabled when GPU nodes are detected.")
+
 	// Add --raw and --exact flags (aliases)
 	var showRaw bool
 	var exactValues bool
@@ -266,6 +271,7 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	_ = viper.BindPFlag("show-node-version", cmd.PersistentFlags().Lookup("show-node-version"))
 	_ = viper.BindPFlag("show-node-age", cmd.PersistentFlags().Lookup("show-node-age"))
 	_ = viper.BindPFlag("show-node-group", cmd.PersistentFlags().Lookup("show-node-group"))
+	_ = viper.BindPFlag("show-gpu", cmd.PersistentFlags().Lookup("show-gpu"))
 	_ = viper.BindPFlag("show-raw", cmd.PersistentFlags().Lookup("raw"))
 	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
 	_ = viper.BindPFlags(cmd.Flags())
@@ -415,6 +421,13 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	totals.ClusterInfo = core.ClusterInfo{
 		Host:          gc.restConfig.Host,
 		MasterVersion: k8sver.GitVersion,
+	}
+
+	// Auto-detect GPU resources: if any node has allocatable GPUs, enable
+	// the GPU column unless the user explicitly set --show-gpu=false.
+	if !viper.GetBool("show-gpu") && totals.TotalAllocatableGPU != nil && !totals.TotalAllocatableGPU.IsZero() {
+		viper.Set("show-gpu", true)
+		log.Debug("GPU resources detected, auto-enabling --show-gpu")
 	}
 
 	// If requested, enrich with pod-level details (reusing existing helper).
