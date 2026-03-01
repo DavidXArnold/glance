@@ -15,11 +15,12 @@ This document provides context and guidelines for AI assistants working on this 
 
 High-level layering (current state):
 
-- `pkg/core` – canonical domain types (`NodeStats`, `NodeMap`, `Totals`, `Snapshot`) and shared aggregation logic (`ComputeNodeSnapshot`) used by both static and live paths.
+- `pkg/core` – canonical domain types (`NodeStats`, `NodeMap`, `Totals`, `Snapshot`) and shared aggregation logic (`ComputeNodeSnapshot`) used by both static and live paths. Includes GPU resource constants (`ResourceNvidiaGPU`, `ResourceAMDGPU`), the `IsGPUResource()` helper, and GPU fields on `NodeStats`/`Totals`.
 - `pkg/cmd` – CLI wiring and mode-specific orchestration:
   - `glance.go` – static `kubectl glance` command, Kubernetes client interactions, and **now delegates node aggregation to `pkg/core`**.
-  - `live.go` – live TUI, which **also calls `pkg/core.ComputeNodeSnapshot` for node-level aggregation**, plus additional view-specific aggregation for namespaces/pods/deployments.
-  - `render.go` – output rendering (text, pretty, JSON, charts) consuming `core.Snapshot`/`core.NodeMap`/`core.Totals`.
+  - `live.go` – live TUI, which **also calls `pkg/core.ComputeNodeSnapshot` for node-level aggregation**, plus additional view-specific aggregation for namespaces/pods/deployments. GPU columns toggled via `[u]` key.
+  - `render.go` – output rendering (text, pretty, JSON, charts) consuming `core.Snapshot`/`core.NodeMap`/`core.Totals`. GPU columns in static node/pod/deployment views when `--show-gpu` is enabled.
+  - `stats.go` – shared aggregation helpers (`CollectPodStats`, `CollectDeploymentStats`) used by both static and live paths. Scans containers for GPU extended resources via `core.IsGPUResource`.
   - `types.go` – compatibility type aliases that re-export `pkg/core` types for callers importing `pkg/cmd`.
 - `pkg/util` – shared helpers.
 
@@ -504,3 +505,73 @@ default    2500m / 4000m        1800m / 4000m     4096Mi / 8192Mi         3200Mi
 - Users with `cloud-info: false` in config: Update to `show-cloud-provider: false`
 - Users scripting against column headers: Update parsers for new ratio format
 - Users preferring old separate columns: Use raw mode with `r` key (shows individual values)
+
+---
+
+## Current Session Status (March 1, 2026 - GPU Resource Support)
+
+### Issue #28: GPU Resource Support
+**Branch:** `28`
+**Status:** Code complete, all checks pass (`make fmt`, `make test`, `make lint`, `make build`)
+
+### Summary
+Added full GPU resource support across all views (static and live). GPU columns are hidden by default and auto-detected in static view or toggled with `[u]` in live view.
+
+### Architecture Changes
+
+#### `pkg/core/types.go`
+- Added `ResourceNvidiaGPU` (`nvidia.com/gpu`) and `ResourceAMDGPU` (`amd.com/gpu`) constants
+- Added `IsGPUResource(name)` helper using `strings.HasSuffix(name, "/gpu")` for forward compatibility
+- Added GPU fields on `NodeStats`: `AllocatableGPU`, `CapacityGPU`, `AllocatedGPURequests`, `AllocatedGPULimits`
+- Added GPU fields on `Totals`: `TotalAllocatableGPU`, `TotalCapacityGPU`, `TotalAllocatedGPURequests`, `TotalAllocatedGPULimits`
+
+#### `pkg/core/aggregate_nodes.go`
+- Refactored `ComputeNodeSnapshot` into 4 focused helpers to reduce cyclomatic complexity:
+  - `populateNodeResources` – CPU/memory/GPU allocatable and capacity
+  - `aggregatePodResources` – pod-level CPU/memory/GPU requests and limits
+  - `applyNodeMetrics` – usage data from metrics API
+  - `accumulateTotals` – aggregate totals across all Ready nodes
+- GPU detection scans node `Allocatable`/`Capacity` for any resource matching `IsGPUResource`
+
+#### `pkg/cmd/stats.go`
+- Added `GPUReq`/`GPULimit` fields to `PodSummaryRow` and `DeploymentSummaryRow`
+- `CollectPodStats` and `CollectDeploymentStats` scan containers for GPU extended resources
+
+#### `pkg/cmd/render.go`
+- GPU columns in static pretty/txt node views (`buildGPUUtilizationCell`, `buildTotalGPUCell`)
+- GPU in cluster summary box when GPUs present
+- GPU columns in `renderPodsStatic` and `renderDeploymentsStatic`
+
+#### `pkg/cmd/glance.go`
+- `--show-gpu` flag with viper binding
+- Auto-detection: enables GPU columns when `totals.TotalAllocatableGPU` is non-zero
+
+#### `pkg/cmd/live.go`
+- `showGPU` field on `LiveState` + `pendingShowGPU`
+- `[u]` key toggle in `handleUIEvent`
+- GPU columns in node, namespace, pod, and deployment views
+- Settings modal "GPU Resources" toggle
+- Menu bar updated with `[u]GPU`
+- `initPendingState`/`applyPendingState`/`saveAllSettings` updated
+
+### Key Files Changed (9 files, +681/-162 lines)
+- `pkg/core/types.go` – GPU constants, helper, fields
+- `pkg/core/aggregate_nodes.go` – refactored into 4 helpers + GPU aggregation
+- `pkg/core/aggregate_nodes_test.go` – 3 new tests (GPU resources, no GPU, IsGPUResource)
+- `pkg/cmd/glance.go` – `--show-gpu` flag with auto-detection
+- `pkg/cmd/render.go` – GPU columns in all static renderers
+- `pkg/cmd/stats.go` – GPU fields on summary row types
+- `pkg/cmd/live.go` – GPU toggle, columns in all live views, settings modal
+- `CHANGELOG.md` – [Unreleased] entries for GPU feature
+- `README.md` – `--show-gpu` flag, `[u]` key, config example, features list
+
+### Testing
+- `pkg/core/aggregate_nodes_test.go`: `TestComputeNodeSnapshot_GPUResources`, `TestComputeNodeSnapshot_NoGPU`, `TestIsGPUResource`
+- `pkg/cmd/stats_test.go`: GPU scanning in `CollectPodStats` and `CollectDeploymentStats` (unit tests with mock K8s clients)
+- All existing tests pass
+
+### Next Steps
+1. Commit changes to branch `28`
+2. Create MR for review
+3. After merge, bump version and tag release
+4. CI will update krew plugin manifest

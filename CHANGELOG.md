@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- GPU resource support across all views (issue #28):
+  - Recognises `nvidia.com/gpu`, `amd.com/gpu`, and any `*/gpu` extended resources.
+  - Static node view (`kubectl glance`): GPU UTILIZATION column in pretty output, GPU REQ/ALLOC in text output, GPU in cluster summary box.
+  - Static pods view (`kubectl glance pods`): GPU REQ/LIMIT column.
+  - Static deployments view (`kubectl glance deployments`): GPU REQ/LIMIT column (multiplied by replica count).
+  - Live TUI: GPU REQ/ALLOC column in Nodes view, GPU REQ/LIMIT in Namespaces/Pods/Deployments views.
+  - `--show-gpu` flag (auto-enabled when GPU nodes are detected in static view).
+  - `[u]` key toggle and settings modal entry for GPU columns in live view.
+  - JSON output automatically includes GPU fields via `omitempty` on core types.
+- Unit tests for GPU aggregation: `TestComputeNodeSnapshot_GPUResources`, `TestComputeNodeSnapshot_NoGPU`, `TestIsGPUResource`.
+
+### Changed
+- Refactored `ComputeNodeSnapshot` into smaller helpers (`populateNodeResources`, `aggregatePodResources`, `applyNodeMetrics`, `accumulateTotals`) to reduce cyclomatic complexity.
+- Extracted `processNamespacePods` from `fetchNamespaceData` to reduce cyclomatic complexity.
+
 ## [0.2.6] - 2026-01-27
 
 ### Added

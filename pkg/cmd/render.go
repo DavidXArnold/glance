@@ -141,15 +141,21 @@ func renderPodsStatic(rows []PodSummaryRow) error {
 		t.SetStyle(pt.StyleLight)
 	}
 
-	t.AppendHeader(pt.Row{
+	showGPU := viper.GetBool("show-gpu")
+
+	headerRow := pt.Row{
 		"NAMESPACE",
 		"POD",
 		"CPU REQUESTS/LIMITS",
 		"CPU USAGE/LIMITS",
 		"MEMORY REQUESTS/LIMITS",
 		"MEMORY USAGE/LIMITS",
-		"STATUS",
-	})
+	}
+	if showGPU {
+		headerRow = append(headerRow, "GPU REQ/LIMIT")
+	}
+	headerRow = append(headerRow, "STATUS")
+	t.AppendHeader(headerRow)
 
 	showRaw := viper.GetBool("show-raw") || viper.GetBool("exact")
 
@@ -168,8 +174,19 @@ func renderPodsStatic(rows []PodSummaryRow) error {
 			formatResourceRatio(cpuUsage, cpuLimit, false, showRaw),
 			formatResourceRatio(memReq, memLimit, true, showRaw),
 			formatResourceRatio(memUsage, memLimit, true, showRaw),
-			r.Status,
 		}
+		if showGPU {
+			if r.GPUReq != nil && r.GPUReq.Value() > 0 {
+				gpuLimVal := int64(0)
+				if r.GPULimit != nil {
+					gpuLimVal = r.GPULimit.Value()
+				}
+				row = append(row, fmt.Sprintf("%d / %d", r.GPUReq.Value(), gpuLimVal))
+			} else {
+				row = append(row, "—")
+			}
+		}
+		row = append(row, r.Status)
 		t.AppendRow(row)
 	}
 
@@ -198,16 +215,20 @@ func renderDeploymentsStatic(rows []DeploymentSummaryRow) error {
 		t.SetStyle(pt.StyleLight)
 	}
 
-	t.AppendHeader(pt.Row{
+	showGPU := viper.GetBool("show-gpu")
+
+	headerRow := pt.Row{
 		"NAMESPACE",
 		"DEPLOYMENT",
 		"STATUS",
 		"CPU REQUESTS/LIMITS",
 		"MEMORY REQUESTS/LIMITS",
-		"REPLICAS",
-		"READY",
-		"AVAILABLE",
-	})
+	}
+	if showGPU {
+		headerRow = append(headerRow, "GPU REQ/LIMIT")
+	}
+	headerRow = append(headerRow, "REPLICAS", "READY", "AVAILABLE")
+	t.AppendHeader(headerRow)
 
 	showRaw := viper.GetBool("show-raw") || viper.GetBool("exact")
 
@@ -223,10 +244,23 @@ func renderDeploymentsStatic(rows []DeploymentSummaryRow) error {
 			r.Status,
 			formatResourceRatio(cpuReq, cpuLimit, false, showRaw),
 			formatResourceRatio(memReq, memLimit, true, showRaw),
+		}
+		if showGPU {
+			if r.GPUReq != nil && r.GPUReq.Value() > 0 {
+				gpuLimVal := int64(0)
+				if r.GPULimit != nil {
+					gpuLimVal = r.GPULimit.Value()
+				}
+				row = append(row, fmt.Sprintf("%d / %d", r.GPUReq.Value(), gpuLimVal))
+			} else {
+				row = append(row, "—")
+			}
+		}
+		row = append(row,
 			fmt.Sprintf("%d", r.Replicas),
 			fmt.Sprintf("%d", r.Ready),
 			fmt.Sprintf("%d", r.Available),
-		}
+		)
 		t.AppendRow(row)
 	}
 
@@ -251,7 +285,7 @@ func buildNodeRow(
 	v *core.NodeStats,
 	status string,
 	statusColor text.Colors,
-	showVersion, showAge, showGroup, showCloud bool,
+	showVersion, showAge, showGroup, showGPU, showCloud bool,
 ) pt.Row {
 	row := pt.Row{
 		name,
@@ -274,6 +308,9 @@ func buildNodeRow(
 		buildCPUUtilizationCell(v),
 		buildMemUtilizationCell(v),
 	)
+	if showGPU {
+		row = append(row, buildGPUUtilizationCell(v))
+	}
 	if showCloud {
 		// Parse provider from ProviderID
 		provider := ""
@@ -312,6 +349,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 	}
 	showAge := viper.GetBool("show-node-age")
 	showGroup := viper.GetBool("show-node-group")
+	showGPU := viper.GetBool("show-gpu")
 
 	// Create main table
 	t := pt.NewWriter()
@@ -343,6 +381,11 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 	col++
 	colMem := col
 	col++
+	colGPU := 0
+	if showGPU {
+		colGPU = col
+		col++
+	}
 
 	showCloud := viper.GetBool("show-cloud-provider")
 	colProvider, colRegion, colInstance, colCapacity := 0, 0, 0, 0
@@ -378,6 +421,9 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 		pt.ColumnConfig{Number: colCPU, AutoMerge: false},
 		pt.ColumnConfig{Number: colMem, AutoMerge: false},
 	)
+	if colGPU != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colGPU, AutoMerge: false})
+	}
 
 	if showCloud {
 		baseColumns = append(baseColumns,
@@ -406,6 +452,9 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 		"CPU UTILIZATION",
 		"MEMORY UTILIZATION",
 	)
+	if showGPU {
+		headerRow = append(headerRow, "GPU UTILIZATION")
+	}
 	if showCloud {
 		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
 	}
@@ -422,6 +471,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 			showVersion,
 			showAge,
 			showGroup,
+			showGPU,
 			showCloud,
 		)
 		t.AppendRow(row)
@@ -443,6 +493,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 			showVersion,
 			showAge,
 			showGroup,
+			showGPU,
 			showCloud,
 		)
 		t.AppendRow(row)
@@ -466,6 +517,9 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 		buildTotalCPUCell(c),
 		buildTotalMemCell(c),
 	)
+	if showGPU {
+		footerRow = append(footerRow, buildTotalGPUCell(c))
+	}
 	if showCloud {
 		footerRow = append(footerRow, "", "", "", "")
 	}
@@ -602,6 +656,22 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 		formatQuantity(c.TotalAllocatableMemory))
 	fmt.Println(padRightDynamic(memAllocLine, boxWidth) + "║")
 
+	// GPU Allocated (only shown when GPUs are present in the cluster)
+	if c.TotalAllocatableGPU != nil && !c.TotalAllocatableGPU.IsZero() {
+		fmt.Println("║" + strings.Repeat(" ", boxWidth) + "║")
+		gpuAllocPct := float64(0)
+		if c.TotalAllocatableGPU.Value() > 0 {
+			gpuAllocPct = float64(c.TotalAllocatedGPURequests.Value()) /
+				float64(c.TotalAllocatableGPU.Value()) * 100
+		}
+		gpuAllocBar := buildColoredProgressBarDynamic(gpuAllocPct, barWidth)
+		gpuAllocLine := fmt.Sprintf("║  GPU Allocated:  %s %5.1f%%  (%d / %d)",
+			gpuAllocBar, gpuAllocPct,
+			c.TotalAllocatedGPURequests.Value(),
+			c.TotalAllocatableGPU.Value())
+		fmt.Println(padRightDynamic(gpuAllocLine, boxWidth) + "║")
+	}
+
 	fmt.Println(boxStyle.Sprint(botBorder))
 }
 
@@ -697,6 +767,22 @@ func buildCPUUtilizationCell(v *NodeStats) string {
 		formatQuantityValue(v.AllocatedCPULimits))
 }
 
+// buildGPUUtilizationCell creates a GPU utilization cell showing requested / allocatable.
+func buildGPUUtilizationCell(v *NodeStats) string {
+	if v.AllocatableGPU == nil || v.AllocatableGPU.IsZero() {
+		return "—"
+	}
+
+	alloc := v.AllocatableGPU.Value()
+	req := v.AllocatedGPURequests.Value()
+	pct := float64(req) / float64(alloc) * 100
+
+	bar := buildMiniProgressBar(pct, 12)
+
+	return fmt.Sprintf("%s %5.1f%%\nReq: %d / %d",
+		bar, pct, req, alloc)
+}
+
 // buildMemUtilizationCell creates a detailed memory utilization cell.
 func buildMemUtilizationCell(v *NodeStats) string {
 	if v.AllocatableMemory == nil || v.AllocatableMemory.IsZero() {
@@ -756,6 +842,20 @@ func buildTotalCPUCell(c *core.Totals) string {
 		usagePct, reqPct,
 		formatQuantity(c.TotalUsageCPU),
 		formatQuantity(c.TotalAllocatableCPU))
+}
+
+// buildTotalGPUCell creates the totals GPU cell.
+func buildTotalGPUCell(c *core.Totals) string {
+	if c.TotalAllocatableGPU == nil || c.TotalAllocatableGPU.IsZero() {
+		return "—"
+	}
+	reqPct := float64(c.TotalAllocatedGPURequests.Value()) /
+		float64(c.TotalAllocatableGPU.Value()) * 100
+
+	return fmt.Sprintf("Req: %5.1f%%\n%d / %d",
+		reqPct,
+		c.TotalAllocatedGPURequests.Value(),
+		c.TotalAllocatableGPU.Value())
 }
 
 // buildTotalMemCell creates the totals memory cell
@@ -852,7 +952,7 @@ func printLegend() {
 }
 
 // buildTableRow creates a standard table row for a single node (text output)
-func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGroup, showCloud bool) pt.Row {
+func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGroup, showGPU, showCloud bool) pt.Row {
 	// Calculate utilization percentages.
 	cpuPct := "--"
 	if v.AllocatableCPU != nil && v.UsageCPU != nil && v.AllocatableCPU.MilliValue() > 0 {
@@ -898,6 +998,15 @@ func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGro
 		memPct,
 	)
 
+	if showGPU {
+		gpuReq := fmt.Sprintf("%d", v.AllocatedGPURequests.Value())
+		gpuAlloc := "0"
+		if v.AllocatableGPU != nil {
+			gpuAlloc = fmt.Sprintf("%d", v.AllocatableGPU.Value())
+		}
+		row = append(row, gpuReq+" / "+gpuAlloc)
+	}
+
 	if showCloud {
 		// Parse provider from ProviderID.
 		provider := ""
@@ -912,7 +1021,7 @@ func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGro
 }
 
 // buildTableFooter creates the footer row for the text table
-func buildTableFooter(c *core.Totals, numNodes int, showVersion, showAge, showGroup, showCloud bool) pt.Row {
+func buildTableFooter(c *core.Totals, numNodes int, showVersion, showAge, showGroup, showGPU, showCloud bool) pt.Row {
 	totalCPUPct := "--"
 	if c.TotalAllocatableCPU != nil && c.TotalUsageCPU != nil && c.TotalAllocatableCPU.MilliValue() > 0 {
 		pct := float64(c.TotalUsageCPU.MilliValue()) / float64(c.TotalAllocatableCPU.MilliValue()) * 100
@@ -948,6 +1057,15 @@ func buildTableFooter(c *core.Totals, numNodes int, showVersion, showAge, showGr
 		formatQuantity(c.TotalUsageMemory),
 		totalMemPct,
 	)
+	if showGPU {
+		gpuTotal := "0 / 0"
+		if c.TotalAllocatableGPU != nil && !c.TotalAllocatableGPU.IsZero() {
+			gpuTotal = fmt.Sprintf("%d / %d",
+				c.TotalAllocatedGPURequests.Value(),
+				c.TotalAllocatableGPU.Value())
+		}
+		footerRow = append(footerRow, gpuTotal)
+	}
 	if showCloud {
 		footerRow = append(footerRow, "", "", "", "")
 	}
@@ -995,6 +1113,7 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	}
 	showAge := viper.GetBool("show-node-age")
 	showGroup := viper.GetBool("show-node-group")
+	showGPU := viper.GetBool("show-gpu")
 
 	// Create main node table with borders.
 	t := pt.NewWriter()
@@ -1039,7 +1158,12 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	colMemUse := col
 	col++
 	colMemPct := col
-	// col++ is not needed for the last column
+	col++
+	colGPU := 0
+	if showGPU {
+		colGPU = col
+		col++
+	}
 
 	showCloud := viper.GetBool("show-cloud-provider")
 	colProvider, colRegion, colInstance, colCapacity := 0, 0, 0, 0
@@ -1079,6 +1203,9 @@ func table(nm *core.NodeMap, c *core.Totals) {
 		pt.ColumnConfig{Number: colMemUse, Align: text.AlignRight}, // Mem Use
 		pt.ColumnConfig{Number: colMemPct, Align: text.AlignRight}, // Mem %
 	)
+	if colGPU != 0 {
+		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colGPU, Align: text.AlignRight}) // GPU
+	}
 
 	if showCloud {
 		baseColumns = append(baseColumns,
@@ -1104,6 +1231,9 @@ func table(nm *core.NodeMap, c *core.Totals) {
 		"CPU REQ", "CPU LIM", "CPU USE", "CPU %",
 		"MEM REQ", "MEM LIM", "MEM USE", "MEM %",
 	)
+	if showGPU {
+		headerRow = append(headerRow, "GPU REQ/ALLOC")
+	}
 	if showCloud {
 		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
 	}
@@ -1112,12 +1242,12 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	// Add node rows.
 	for _, name := range nodeNames {
 		v := (*nm)[name]
-		row := buildTableRow(name, v, showVersion, showAge, showGroup, showCloud)
+		row := buildTableRow(name, v, showVersion, showAge, showGroup, showGPU, showCloud)
 		t.AppendRow(row)
 	}
 
 	// Add totals footer.
-	footerRow := buildTableFooter(c, len(*nm), showVersion, showAge, showGroup, showCloud)
+	footerRow := buildTableFooter(c, len(*nm), showVersion, showAge, showGroup, showGPU, showCloud)
 
 	t.AppendSeparator()
 	t.AppendFooter(footerRow)
@@ -1133,6 +1263,10 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	fmt.Printf("  Allocatable Memory: %s\n", formatQuantity(c.TotalAllocatableMemory))
 	fmt.Printf("  Total Capacity CPU: %s\n", formatQuantity(c.TotalCapacityCPU))
 	fmt.Printf("  Total Capacity Mem: %s\n", formatQuantity(c.TotalCapacityMemory))
+	if c.TotalAllocatableGPU != nil && !c.TotalAllocatableGPU.IsZero() {
+		fmt.Printf("  Allocatable GPU:    %d\n", c.TotalAllocatableGPU.Value())
+		fmt.Printf("  Allocated GPU:      %d\n", c.TotalAllocatedGPURequests.Value())
+	}
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Println()
 }
