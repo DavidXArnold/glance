@@ -12,12 +12,35 @@ jobs:
   krew-release-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      # Checkout main (not the tag) so we pick up the manifest that
+      # GitLab CI updates with the correct version and checksums.
+      - name: Checkout repository (main branch)
         uses: actions/checkout@v3
+        with:
+          ref: main
+
+      # The tag is mirrored before GitLab CI finishes updating the
+      # krew manifest on main. Poll until the manifest version matches
+      # the tag, or time out after 15 minutes.
+      - name: Wait for manifest to match tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Waiting for plugins/krew/glance.yaml to contain version $TAG ..."
+          for i in $(seq 1 30); do
+            git fetch origin main --quiet
+            git checkout origin/main -- plugins/krew/glance.yaml 2>/dev/null || true
+            CURRENT=$(grep 'version:' plugins/krew/glance.yaml | head -1 | tr -d ' "' | cut -d: -f2)
+            echo "  attempt $i: manifest version=$CURRENT, want=$TAG"
+            if [ "$CURRENT" = "$TAG" ]; then
+              echo "Manifest is up to date."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "ERROR: timed out waiting for manifest update"
+          exit 1
 
       - name: Run krew-release-bot
         uses: rajatjindal/krew-release-bot@v0.0.46
         with:
-          # We reuse the manifest that GitLab CI already updates with the
-          # correct version and checksums on each tagged release.
           krew_template_file: plugins/krew/glance.yaml
