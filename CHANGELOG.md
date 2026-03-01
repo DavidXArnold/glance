@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-01
+
 ### Added
 - GPU resource support across all views (issue #28):
   - Recognises `nvidia.com/gpu`, `amd.com/gpu`, and any `*/gpu` extended resources.
