@@ -92,7 +92,37 @@ kubectl glance live  # then press 'p' and use ←→ to navigate namespaces
 kubectl glance
 ```
 
-**Example Output:**
+In addition to the top-level node view, there are dedicated static commands for
+pods and deployments that mirror the live views but run once and exit:
+
+```shell
+# Static pods view (all namespaces by default)
+kubectl glance pods
+
+# Static pods view for a specific namespace
+kubectl glance pods -n default
+
+# Static deployments view (all namespaces)
+kubectl glance deployments
+
+# Static deployments view for a specific namespace
+kubectl glance deployments -n production
+```
+
+These commands support the same selectors and output formats as the root
+command:
+
+```shell
+# Filter by labels and show JSON for scripting
+kubectl glance pods -l app=myapp -o json
+
+# Field selector + pretty output
+kubectl glance deployments \
+  --field-selector metadata.namespace=prod \
+  -o pretty
+```
+
+**Example Output (nodes):**
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ CLUSTER: https://k8s.example.com:6443                                        │
@@ -549,17 +579,21 @@ kubectl glance -o json \
 
 ### Static View Flags
 
-||| Flag | Short | Default | Description |
-|||------|-------|---------|-------------|
-||| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
-||| `--show-cloud-provider` | `-c` | `false` | Display cloud provider metadata (AWS/GCP instance types, regions) when set to true; off by default |
-|| `--pods` | `-p` | `false` | Display pod-level resource details in static view |
-|| `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
-|| `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
-|| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
-|| `--show-node-version` | | *unset* (treated as "show") | Control VERSION column in static output: when explicitly set to `false`, hides the VERSION column; when unset or `true`, VERSION is shown |
-|| `--show-node-age` | | `false` | Show AGE column (node creation time) in static output |
-|| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
+|||| Flag | Short | Default | Description |
+||||------|-------|---------|-------------|
+|||| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
+|||| `--show-cloud-provider` | `-c` | `false` | Display cloud provider metadata (AWS/GCP instance types, regions) when set to true; off by default |
+||| `--pods` | `-p` | `false` | Display pod-level resource details in static node view (root `kubectl glance`) |
+||| `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
+||| `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
+||| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
+||| `--show-node-version` | | *unset* (treated as "show") | Control VERSION column in static output: when explicitly set to `false`, hides the VERSION column; when unset or `true`, VERSION is shown |
+||| `--show-node-age` | | `false` | Show AGE column (node creation time) in static output |
+||| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
+
+**Static subcommands** (`kubectl glance pods`, `kubectl glance deployments`) reuse
+these selectors and output flags, and additionally honor the global `--namespace`
+flag from kubectl/genericclioptions.
 
 ### Live View Flags
 

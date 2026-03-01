@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-01-27
+
+### Added
+- Static `kubectl glance pods` and `kubectl glance deployments` commands that mirror the live pods/deployments views but run once and exit.
+- Shared aggregation helpers in `pkg/cmd/stats.go` reused by both live and static paths to keep metrics and formatting consistent.
+
+### Fixed
+- Resynchronized version constants and git tags by bumping `version/version.go` to 0.2.6 so the next release matches the latest published tags.
+
 ## [0.2.4] - 2026-01-27
 
 ### Changed

@@ -348,8 +348,10 @@ func NewGlanceCmd() *cobra.Command {
 		clusterFlag.Usage = "The name of the kubeconfig cluster to use (rarely needed; prefer --context)"
 	}
 
-	// Add live subcommand
+	// Add subcommands
 	cmd.AddCommand(NewLiveCmd(gc))
+	cmd.AddCommand(NewPodsCmd(gc))
+	cmd.AddCommand(NewDeploymentsCmd(gc))
 
 	return cmd
 }

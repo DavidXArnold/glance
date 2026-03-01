@@ -1180,94 +1180,46 @@ func fetchPodData(
 		"STATUS",
 	}
 
-	// Fetch pods and metrics in parallel using watch cache
-	g, gCtx := errgroup.WithContext(ctx)
-
-	var pods *v1.PodList
-	var podMetricsList *metricsV1beta1api.PodMetricsList
-
-	g.Go(func() error {
-		var err error
-		pods, err = k8sClient.CoreV1().Pods(namespace).List(gCtx, metav1.ListOptions{
-			ResourceVersion: "0",
-		})
-		return err
-	})
-
 	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
-	if err == nil {
-		g.Go(func() error {
-			var err error
-			podMetricsList, err = metricsClient.MetricsV1beta1().PodMetricses(namespace).List(gCtx, metav1.ListOptions{
-				ResourceVersion: "0",
-			})
-			if err != nil {
-				log.Debugf("Failed to fetch pod metrics: %v", err)
-			}
-			return nil // Don't fail on metrics error
-		})
+	if err != nil {
+		// Metrics are best-effort; log and proceed without usage data.
+		log.Debugf("Failed to create metrics client for pods: %v", err)
+		metricsClient = nil
 	}
 
-	if err := g.Wait(); err != nil {
+	// Use shared aggregation helper so that static and live views stay in sync.
+	podSummaries, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, nil)
+	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	state.totalPods = len(pods.Items)
+	state.totalPods = len(podSummaries)
 
-	metricsMap := make(map[string]*metricsV1beta1api.PodMetrics)
-	if podMetricsList != nil {
-		for i := range podMetricsList.Items {
-			metricsMap[podMetricsList.Items[i].Name] = &podMetricsList.Items[i]
-		}
-	}
-
-	podData := make([]podRowData, 0, len(pods.Items))
-	for _, pod := range pods.Items {
-		cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
-		cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memReq := resource.NewQuantity(0, resource.BinarySI)
-		memLimit := resource.NewQuantity(0, resource.BinarySI)
-		cpuUsage := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memUsage := resource.NewQuantity(0, resource.BinarySI)
-
-		for _, container := range pod.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Cpu(); lim != nil {
-				cpuLimit.Add(*lim)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Memory(); lim != nil {
-				memLimit.Add(*lim)
-			}
-		}
-
-		if pm, ok := metricsMap[pod.Name]; ok {
-			for _, container := range pm.Containers {
-				cpuUsage.Add(container.Usage[v1.ResourceCPU])
-				memUsage.Add(container.Usage[v1.ResourceMemory])
-			}
-		}
+	podData := make([]podRowData, 0, len(podSummaries))
+	for _, ps := range podSummaries {
+		cpuReq := ps.CPUReq
+		cpuLimit := ps.CPULimit
+		memReq := ps.MemReq
+		memLimit := ps.MemLimit
+		cpuUsage := ps.CPUUsage
+		memUsage := ps.MemUsage
 
 		// Format status with icon
-		podStatus := string(pod.Status.Phase)
+		podStatus := ps.Status
 		statusIcon := getStatusIcon(podStatus)
-		isRunning := pod.Status.Phase == v1.PodRunning
+		isRunning := podStatus == string(v1.PodRunning)
 
 		cpuUsagePct := float64(0)
-		if cpuLimit.MilliValue() > 0 {
+		if cpuLimit != nil && cpuLimit.MilliValue() > 0 {
 			cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuLimit.MilliValue()) * 100
 		}
 		memUsagePct := float64(0)
-		if memLimit.Value() > 0 {
+		if memLimit != nil && memLimit.Value() > 0 {
 			memUsagePct = float64(memUsage.Value()) / float64(memLimit.Value()) * 100
 		}
 
 		row := []string{
-			pod.Name,
+			ps.Name,
 			formatResourceRatio(cpuReq, cpuLimit, false, state.showRawResources),
 			formatResourceRatio(cpuUsage, cpuLimit, false, state.showRawResources),
 			formatResourceRatio(memReq, memLimit, true, state.showRawResources),
@@ -1873,65 +1825,29 @@ func fetchDeploymentData(
 		"REPLICAS", "READY", "AVAILABLE",
 	}
 
-	deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
-		ResourceVersion: "0",
-	})
+	// Use shared aggregation helper so that static and live deployment views stay in sync.
+	deploySummaries, err := CollectDeploymentStats(ctx, k8sClient, namespace, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list deployments: %w", err)
 	}
 
-	var rows [][]string
-	var metrics []ResourceMetrics
-	for _, deploy := range deployments.Items {
-		cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
-		cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
-		memReq := resource.NewQuantity(0, resource.BinarySI)
-		memLimit := resource.NewQuantity(0, resource.BinarySI)
+	rows := make([][]string, 0, len(deploySummaries))
+	metrics := make([]ResourceMetrics, 0, len(deploySummaries))
 
-		for _, container := range deploy.Spec.Template.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Cpu(); lim != nil {
-				cpuLimit.Add(*lim)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Memory(); lim != nil {
-				memLimit.Add(*lim)
-			}
-		}
-
-		// Multiply by replica count for per-deployment totals
-		replicas := int32(1)
-		if deploy.Spec.Replicas != nil {
-			replicas = *deploy.Spec.Replicas
-		}
-
-		cpuReq = multiplyQuantity(cpuReq, int(replicas))
-		cpuLimit = multiplyQuantity(cpuLimit, int(replicas))
-		memReq = multiplyQuantity(memReq, int(replicas))
-		memLimit = multiplyQuantity(memLimit, int(replicas))
-
-		// Determine deployment status
-		deployStatus := statusReady + " " + nodeStatusReady
-		if deploy.Status.ReadyReplicas < replicas {
-			if deploy.Status.ReadyReplicas == 0 {
-				deployStatus = statusFailed + " " + nodeStatusNotReady
-			} else {
-				deployStatus = statusPending + " Partial"
-			}
-		}
+	for _, ds := range deploySummaries {
+		cpuReq := ds.CPUReq
+		cpuLimit := ds.CPULimit
+		memReq := ds.MemReq
+		memLimit := ds.MemLimit
 
 		rows = append(rows, []string{
-			deploy.Name,
-			deployStatus,
+			ds.Name,
+			ds.Status,
 			formatResourceRatio(cpuReq, cpuLimit, false, false),
 			formatResourceRatio(memReq, memLimit, true, false),
-			fmt.Sprintf("%d", replicas),
-			fmt.Sprintf("%d", deploy.Status.ReadyReplicas),
-			fmt.Sprintf("%d", deploy.Status.AvailableReplicas),
+			fmt.Sprintf("%d", ds.Replicas),
+			fmt.Sprintf("%d", ds.Ready),
+			fmt.Sprintf("%d", ds.Available),
 		})
 
 		metrics = append(metrics, ResourceMetrics{
