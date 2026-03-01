@@ -2,8 +2,10 @@ name: krew-release-bot
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches:
+      - main
+    paths:
+      - 'plugins/krew/glance.yaml'
   workflow_dispatch: {}
 
 jobs:
