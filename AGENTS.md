@@ -128,8 +128,9 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 - Creates GitLab Release
 - Updates `plugins/krew/glance.yaml` with new checksums
 - Syncs tags and the `main` branch to the GitHub mirror (`github.com/DavidXArnold/glance`)
-- Triggers the krew-release-bot GitHub Action when `plugins/krew/glance.yaml` changes on `main`
-  - The GitHub Action runs `rajatjindal/krew-release-bot` against `plugins/krew/glance.yaml`
+- Triggers the krew-release-bot GitHub Action when the release tag is mirrored to GitHub
+  - The action checks out `main` and polls (up to 15 minutes) until `plugins/krew/glance.yaml` matches the tag, then runs `rajatjindal/krew-release-bot`
+  - The bot requires `GITHUB_REF` to be a tag ref; to re-run for an existing release, use workflow_dispatch with the tag as the ref
   - The bot opens/updates a PR in `kubernetes-sigs/krew-index` with the new manifest for the tagged release
 
 **Version naming:**

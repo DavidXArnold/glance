@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Krew release automation now triggers on tag push again, so krew-index PRs are opened automatically for new releases instead of timing out.
+
 ## [0.3.1] - 2026-10-21
 
 ### Changed
