@@ -32,9 +32,6 @@ import (
 	"golang.org/x/term"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/tools/clientcmd"
-
-	// needed to authenticate with GCP
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 )
 
 const (
@@ -144,17 +141,17 @@ func renderPodsStatic(rows []PodSummaryRow) error {
 	showGPU := viper.GetBool("show-gpu")
 
 	headerRow := pt.Row{
-		"NAMESPACE",
+		headerNamespace,
 		"POD",
-		"CPU REQUESTS/LIMITS",
-		"CPU USAGE/LIMITS",
-		"MEMORY REQUESTS/LIMITS",
-		"MEMORY USAGE/LIMITS",
+		headerCPURequests,
+		headerCPUUsage,
+		headerMemoryRequests,
+		headerMemoryUsage,
 	}
 	if showGPU {
 		headerRow = append(headerRow, "GPU REQ/LIMIT")
 	}
-	headerRow = append(headerRow, "STATUS")
+	headerRow = append(headerRow, headerStatus)
 	t.AppendHeader(headerRow)
 
 	showRaw := viper.GetBool("show-raw") || viper.GetBool("exact")
@@ -218,11 +215,11 @@ func renderDeploymentsStatic(rows []DeploymentSummaryRow) error {
 	showGPU := viper.GetBool("show-gpu")
 
 	headerRow := pt.Row{
-		"NAMESPACE",
+		headerNamespace,
 		"DEPLOYMENT",
-		"STATUS",
-		"CPU REQUESTS/LIMITS",
-		"MEMORY REQUESTS/LIMITS",
+		headerStatus,
+		headerCPURequests,
+		headerMemoryRequests,
 	}
 	if showGPU {
 		headerRow = append(headerRow, "GPU REQ/LIMIT")
@@ -436,8 +433,8 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 	t.SetColumnConfigs(baseColumns)
 
 	headerRow := pt.Row{
-		"NODE",
-		"STATUS",
+		headerNode,
+		headerStatus,
 	}
 	if showVersion {
 		headerRow = append(headerRow, "VERSION")
@@ -1217,7 +1214,7 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	}
 	t.SetColumnConfigs(baseColumns)
 
-	headerRow := pt.Row{"NODE", "STATUS"}
+	headerRow := pt.Row{headerNode, headerStatus}
 	if showVersion {
 		headerRow = append(headerRow, "VERSION")
 	}

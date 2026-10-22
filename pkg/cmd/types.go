@@ -43,3 +43,22 @@ type (
 	Totals      = core.Totals
 	Glance      = core.Glance
 )
+
+// Table column headers shared by the static and live renderers.
+const (
+	headerNode           = "NODE"
+	headerNamespace      = "NAMESPACE"
+	headerStatus         = "STATUS"
+	headerCPURequests    = "CPU REQUESTS/LIMITS"
+	headerCPUUsage       = "CPU USAGE/LIMITS"
+	headerMemoryRequests = "MEMORY REQUESTS/LIMITS"
+	headerMemoryUsage    = "MEMORY USAGE/LIMITS"
+)
+
+// Structured log field keys used when reporting cloud metadata lookups.
+const (
+	logFieldNode        = "node"
+	logFieldProvider    = "provider"
+	logFieldProviderID  = "provider_id"
+	logFieldInstanceKey = "instance_key"
+)

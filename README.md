@@ -4,7 +4,7 @@
 
 # `glance` - kubectl plugin to view cluster resource allocation and usage
 
-[![Go Version](https://img.shields.io/badge/Go-1.25-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.26-blue.svg)](https://golang.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.31-blue.svg)](https://kubernetes.io)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
@@ -56,7 +56,7 @@ kubectl krew install glance
 
 ### From Source
 
-Build from source with Go 1.25 or higher:
+Build from source with Go 1.26 or higher:
 
 ```shell
 git clone https://gitlab.com/davidxarnold/glance.git
@@ -761,7 +761,7 @@ kubectl glance --exact -o json | jq '{
 ### Client Requirements
 
 - **kubectl**: 1.12 or higher
-- **Go**: 1.25 or higher (for building from source)
+- **Go**: 1.26 or higher (for building from source)
 - **Terminal**: Supports ANSI colors (for pretty output and live view)
 
 ### Permissions

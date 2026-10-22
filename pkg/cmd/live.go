@@ -976,11 +976,11 @@ func fetchNamespaceData(
 	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
-		"NAMESPACE",
-		"CPU REQUESTS/LIMITS",
-		"CPU USAGE/LIMITS",
-		"MEMORY REQUESTS/LIMITS",
-		"MEMORY USAGE/LIMITS",
+		headerNamespace,
+		headerCPURequests,
+		headerCPUUsage,
+		headerMemoryRequests,
+		headerMemoryUsage,
 		"PODS",
 	}
 	if state.showGPU {
@@ -1212,11 +1212,11 @@ func fetchPodData(
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
 		"POD",
-		"CPU REQUESTS/LIMITS",
-		"CPU USAGE/LIMITS",
-		"MEMORY REQUESTS/LIMITS",
-		"MEMORY USAGE/LIMITS",
-		"STATUS",
+		headerCPURequests,
+		headerCPUUsage,
+		headerMemoryRequests,
+		headerMemoryUsage,
+		headerStatus,
 	}
 	if state.showGPU {
 		// Insert GPU column before STATUS
@@ -1361,7 +1361,7 @@ type nodeRowData struct {
 
 // buildNodeHeader constructs the table header based on toggle states.
 func buildNodeHeader(state *LiveState) []string {
-	header := []string{"NODE", "STATUS"}
+	header := []string{headerNode, headerStatus}
 
 	if state.showNodeVersion {
 		header = append(header, "VERSION")
@@ -1666,19 +1666,19 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 			md, err := state.cloudCache.GetOrFetch(ctx, providerName, instanceKey)
 			if err != nil {
 				log.WithFields(log.Fields{
-					"node":         nodeData[idx].row[0],
-					"provider":     providerName,
-					"provider_id":  cacheKey,
-					"instance_key": instanceKey,
+					logFieldNode:        nodeData[idx].row[0],
+					logFieldProvider:    providerName,
+					logFieldProviderID:  cacheKey,
+					logFieldInstanceKey: instanceKey,
 				}).Warnf("failed to fetch cloud metadata: %v", err)
 				return
 			}
 			if md == nil {
 				log.WithFields(log.Fields{
-					"node":         nodeData[idx].row[0],
-					"provider":     providerName,
-					"provider_id":  cacheKey,
-					"instance_key": instanceKey,
+					logFieldNode:        nodeData[idx].row[0],
+					logFieldProvider:    providerName,
+					logFieldProviderID:  cacheKey,
+					logFieldInstanceKey: instanceKey,
 				}).Debug("no cloud metadata returned for node")
 				return
 			}
@@ -1893,7 +1893,7 @@ func fetchDeploymentData(
 	namespace string,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
-		"DEPLOYMENT", "STATUS", "CPU REQUESTS/LIMITS", "MEMORY REQUESTS/LIMITS",
+		"DEPLOYMENT", headerStatus, headerCPURequests, headerMemoryRequests,
 		"REPLICAS", "READY", "AVAILABLE",
 	}
 

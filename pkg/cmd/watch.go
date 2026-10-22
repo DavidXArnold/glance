@@ -21,6 +21,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -264,25 +265,9 @@ func (wc *WatchCache) ListNodesWithSelector(selector string) ([]v1.Node, error) 
 
 	var result []v1.Node
 	for _, node := range wc.nodes {
-		if sel.Matches(labelSetFromMap(node.Labels)) {
+		if sel.Matches(labels.Set(node.Labels)) {
 			result = append(result, node)
 		}
 	}
 	return result, nil
-}
-
-// labelSetFromMap converts a map to labels.Set for selector matching
-type labelSet map[string]string
-
-func labelSetFromMap(m map[string]string) labelSet {
-	return labelSet(m)
-}
-
-func (ls labelSet) Has(key string) bool {
-	_, exists := ls[key]
-	return exists
-}
-
-func (ls labelSet) Get(key string) string {
-	return ls[key]
 }

@@ -51,6 +51,12 @@ linters-settings:
 
 linters:
   disable-all: true
+  exclusions:
+    rules:
+    # Repeated literals in test fixtures are clearer inline than as constants.
+    - path: _test\.go
+      linters:
+      - goconst
   enable:
   - bodyclose
   # - depguard  # Disabled due to v2 compatibility issues
