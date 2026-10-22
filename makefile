@@ -39,7 +39,7 @@ lint:
 		-v $(PWD):/app \
 		-w /app \
 		-e GOPROXY=https://proxy.golang.org,direct \
-		golangci/golangci-lint:v2.7.2 sh -c "go mod download && golangci-lint run -v --timeout=5m"
+		golangci/golangci-lint:v2.14.0 sh -c "go mod download && golangci-lint run -v --timeout=5m"
 
 fmt:
 	go run golang.org/x/tools/cmd/goimports@latest -w `find . -type f -name '*.go'`

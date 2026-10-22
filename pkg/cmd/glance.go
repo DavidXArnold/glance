@@ -41,9 +41,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	// needed to authenticate with GCP
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
@@ -169,7 +166,6 @@ func configureLogging() {
 	level, err := log.ParseLevel(logLevel)
 	if err != nil {
 		level = log.WarnLevel
-		logLevel = "warn"
 	}
 	log.SetLevel(level)
 
@@ -189,11 +185,12 @@ func configureLogging() {
 			logDir = os.TempDir()
 		}
 
-		// Create log file: <log-level>-glance.log
-		logFileName := fmt.Sprintf("%s-glance.log", logLevel)
+		// Create log file: <log-level>-glance.log. Use the parsed level rather
+		// than the raw input so the file name is always a known level name.
+		logFileName := fmt.Sprintf("%s-glance.log", level.String())
 		logFilePath := filepath.Clean(filepath.Join(logDir, logFileName))
 
-		// #nosec G304 -- path is constructed from controlled inputs (home dir + fixed filename)
+		// #nosec G304 G703 -- path is constructed from controlled inputs (home dir + parsed log level)
 		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err == nil {
 			log.SetOutput(logFile)
@@ -632,19 +629,19 @@ func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeS
 		md, err := cache.GetOrFetch(ctx, cp, instanceKey)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"node":         n.GetName(),
-				"provider":     cp,
-				"provider_id":  ns.ProviderID,
-				"instance_key": instanceKey,
+				logFieldNode:        n.GetName(),
+				logFieldProvider:    cp,
+				logFieldProviderID:  ns.ProviderID,
+				logFieldInstanceKey: instanceKey,
 			}).Warnf("failed to fetch cloud metadata: %v", err)
 			return
 		}
 		if md == nil {
 			log.WithFields(log.Fields{
-				"node":         n.GetName(),
-				"provider":     cp,
-				"provider_id":  ns.ProviderID,
-				"instance_key": instanceKey,
+				logFieldNode:        n.GetName(),
+				logFieldProvider:    cp,
+				logFieldProviderID:  ns.ProviderID,
+				logFieldInstanceKey: instanceKey,
 			}).Debug("no cloud metadata returned for node")
 			return
 		}

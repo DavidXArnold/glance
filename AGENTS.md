@@ -6,7 +6,7 @@ This document provides context and guidelines for AI assistants working on this 
 
 **Glance** is a kubectl plugin that displays Kubernetes cluster resource allocation and utilization. It provides quick insights into CPU and memory usage across nodes, namespaces, pods, and deployments.
 
-- **Language**: Go 1.25
+- **Language**: Go 1.26
 - **Type**: kubectl plugin (CLI tool)
 - **License**: Apache 2.0
 - **Repository**: https://gitlab.com/davidxarnold/glance
@@ -149,7 +149,7 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 
 - Pipeline defined in `.gitlab-ci.yml`
 - Release jobs only trigger on semver tags (`v*.*.*`)
-- Uses `golang:1.25` Docker image
+- Uses `golang:1.26` Docker image
 - Release jobs checkout latest `main` before pushing manifest updates (to avoid non-fast-forward errors)
 
 ## Important Files to Keep in Sync

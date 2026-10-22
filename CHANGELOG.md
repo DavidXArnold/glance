@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Minimum Go version for building from source is now 1.26 (Go 1.25 is no longer supported upstream); builds use the Go 1.26.10 toolchain.
+- Updated Kubernetes client libraries from v0.31 to v0.37 and refreshed cobra, viper, go-pretty, logrus, and the AWS/GCP SDKs.
+- CI lint now uses golangci-lint v2.14.0.
+
+### Removed
+- Removed the legacy in-tree GCP auth plugin import; GKE clusters authenticate via `gke-gcloud-auth-plugin` as configured in kubeconfig.
+
+### Security
+- Fixed 12 vulnerabilities reachable from glance reported by `govulncheck` by upgrading `golang.org/x/net`, `golang.org/x/text`, `google.golang.org/grpc`, `go.opentelemetry.io/otel`, and `github.com/go-viper/mapstructure/v2` (#40).
+
 ## [0.3.0] - 2026-03-01
 
 ### Added
