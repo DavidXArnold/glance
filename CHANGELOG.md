@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-21
+
 ### Changed
 - Minimum Go version for building from source is now 1.26 (Go 1.25 is no longer supported upstream); builds use the Go 1.26.10 toolchain.
 - Updated Kubernetes client libraries from v0.31 to v0.37 and refreshed cobra, viper, go-pretty, logrus, and the AWS/GCP SDKs.
