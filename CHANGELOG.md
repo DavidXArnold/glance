@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Pod CPU/memory usage is now matched by namespace and name, so same-named pods in different namespaces (e.g. StatefulSet replicas such as `redis-0`) no longer show each other's usage (#32).
+- `--field-selector` is now sent to the API server as a field selector instead of being parsed as part of the label selector. Previously combining it with `--selector` failed with a parse error, and using it alone with `glance pods`/`glance deployments` silently returned no results (#33).
+- Errors are printed once instead of twice (#36).
 - Krew release automation now triggers on tag push again, so krew-index PRs are opened automatically for new releases instead of timing out.
 
 ## [0.3.1] - 2026-10-21

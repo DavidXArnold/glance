@@ -32,6 +32,7 @@ import (
 	v "gitlab.com/davidxarnold/glance/version"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	metricsapi "k8s.io/metrics/pkg/apis/metrics"
@@ -324,18 +325,12 @@ func NewGlanceCmd() *cobra.Command {
 
 			k8sClient, err := kubernetes.NewForConfig(gc.restConfig)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				return err
+				return fmt.Errorf("failed to create kubernetes client: %w", err)
 			}
 
-			err = GlanceK8s(k8sClient, gc)
-			if err != nil {
-				// Ensure user-visible error even when logs are redirected to a file
-				// (e.g., GLANCE_LOG_LEVEL=debug writing to ~/.glance/*-glance.log).
-				fmt.Fprintln(os.Stderr, err.Error())
-				return err
-			}
-			return nil
+			// Errors are printed once by the entrypoint (cmd/glance.go), which
+			// writes to stderr even when logs are redirected to a file.
+			return GlanceK8s(k8sClient, gc)
 		},
 	}
 
@@ -428,15 +423,9 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 	}
 
 	// If requested, enrich with pod-level details (reusing existing helper).
-	labelSelector := labels.Everything()
-	ls := viper.GetString("selector")
-	fs := viper.GetString("field-selector")
-
-	if fs != "" || ls != "" {
-		labelSelector, err = labels.Parse(ls + " " + fs)
-		if err != nil {
-			return fmt.Errorf("invalid label/field selector: %w", err)
-		}
+	labelSelector, _, err := getSelectors()
+	if err != nil {
+		return err
 	}
 
 	if viper.GetBool("pods") {
@@ -542,19 +531,21 @@ func getPodsInfo(
 	return podMap
 }
 
-func getLabelSelector() (labels.Selector, error) {
-	labelSelector := labels.Everything()
-	ls := viper.GetString("selector")
-	fs := viper.GetString("field-selector")
-
-	if fs != "" || ls != "" {
-		var err error
-		labelSelector, err = labels.Parse(ls + " " + fs)
-		if err != nil {
-			return nil, err
-		}
+// getSelectors parses the --selector (label) and --field-selector flags.
+// They use different syntaxes and are sent to the API server separately, so
+// each is parsed on its own. Unset flags yield selectors that match everything.
+func getSelectors() (labels.Selector, fields.Selector, error) {
+	labelSelector, err := labels.Parse(viper.GetString("selector"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid label selector: %w", err)
 	}
-	return labelSelector, nil
+
+	fieldSelector, err := fields.ParseSelector(viper.GetString("field-selector"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid field selector: %w", err)
+	}
+
+	return labelSelector, fieldSelector, nil
 }
 
 // nolint interfacer
