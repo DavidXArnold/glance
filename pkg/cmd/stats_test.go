@@ -22,8 +22,13 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+	metricsfake "k8s.io/metrics/pkg/client/clientset/versioned/fake"
 )
 
 func TestCollectPodStats_GPUResources(t *testing.T) {
@@ -50,7 +55,7 @@ func TestCollectPodStats_GPUResources(t *testing.T) {
 	}
 
 	client := fake.NewSimpleClientset(pod)
-	rows, err := CollectPodStats(context.Background(), client, nil, "default", labels.Everything())
+	rows, err := CollectPodStats(context.Background(), client, nil, "default", labels.Everything(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,7 +93,7 @@ func TestCollectPodStats_NoGPU(t *testing.T) {
 	}
 
 	client := fake.NewSimpleClientset(pod)
-	rows, err := CollectPodStats(context.Background(), client, nil, "default", labels.Everything())
+	rows, err := CollectPodStats(context.Background(), client, nil, "default", labels.Everything(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +143,7 @@ func TestCollectPodStats_MultiContainerGPU(t *testing.T) {
 	}
 
 	client := fake.NewSimpleClientset(pod)
-	rows, err := CollectPodStats(context.Background(), client, nil, "ml", labels.Everything())
+	rows, err := CollectPodStats(context.Background(), client, nil, "ml", labels.Everything(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +194,7 @@ func TestCollectDeploymentStats_GPUResources(t *testing.T) {
 	}
 
 	client := fake.NewSimpleClientset(deploy)
-	rows, err := CollectDeploymentStats(context.Background(), client, "default", labels.Everything())
+	rows, err := CollectDeploymentStats(context.Background(), client, "default", labels.Everything(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +245,7 @@ func TestCollectDeploymentStats_NoGPU(t *testing.T) {
 	}
 
 	client := fake.NewSimpleClientset(deploy)
-	rows, err := CollectDeploymentStats(context.Background(), client, "default", labels.Everything())
+	rows, err := CollectDeploymentStats(context.Background(), client, "default", labels.Everything(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,4 +260,101 @@ func TestCollectDeploymentStats_NoGPU(t *testing.T) {
 	if row.GPULimit.Value() != 0 {
 		t.Errorf("expected GPU limits 0, got %d", row.GPULimit.Value())
 	}
+}
+
+// TestCollectPodStats_SameNameAcrossNamespaces guards against pod metrics
+// being matched by name alone, which mixed up usage for same-named pods
+// (e.g. StatefulSet replicas) in different namespaces.
+func TestCollectPodStats_SameNameAcrossNamespaces(t *testing.T) {
+	newPod := func(namespace string) *v1.Pod {
+		return &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "redis-0", Namespace: namespace},
+			Spec:       v1.PodSpec{Containers: []v1.Container{{Name: "redis"}}},
+			Status:     v1.PodStatus{Phase: v1.PodRunning},
+		}
+	}
+	newMetrics := func(namespace string, milliCPU int64) metricsv1beta1.PodMetrics {
+		return metricsv1beta1.PodMetrics{
+			ObjectMeta: metav1.ObjectMeta{Name: "redis-0", Namespace: namespace},
+			Containers: []metricsv1beta1.ContainerMetrics{{
+				Name: "redis",
+				Usage: v1.ResourceList{
+					v1.ResourceCPU:    *resource.NewMilliQuantity(milliCPU, resource.DecimalSI),
+					v1.ResourceMemory: *resource.NewQuantity(milliCPU*1024*1024, resource.BinarySI),
+				},
+			}},
+		}
+	}
+
+	client := fake.NewSimpleClientset(newPod("team-a"), newPod("team-b"))
+
+	// The generated metrics fake cannot list pod metrics through its object
+	// tracker, so serve the list from a reactor.
+	metricsClient := &metricsfake.Clientset{}
+	metricsClient.AddReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &metricsv1beta1.PodMetricsList{
+			Items: []metricsv1beta1.PodMetrics{newMetrics("team-a", 100), newMetrics("team-b", 900)},
+		}, nil
+	})
+
+	rows, err := CollectPodStats(context.Background(), client, metricsClient, "", labels.Everything(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+
+	want := map[string]int64{"team-a": 100, "team-b": 900}
+	for _, row := range rows {
+		if got := row.CPUUsage.MilliValue(); got != want[row.Namespace] {
+			t.Errorf("%s/%s CPU usage = %dm, want %dm", row.Namespace, row.Name, got, want[row.Namespace])
+		}
+		if got, wantMem := row.MemUsage.Value(), want[row.Namespace]*1024*1024; got != wantMem {
+			t.Errorf("%s/%s memory usage = %d, want %d", row.Namespace, row.Name, got, wantMem)
+		}
+	}
+}
+
+// TestCollectStats_FieldSelector verifies field selectors are sent to the API
+// server as field selectors rather than being folded into the label selector.
+func TestCollectStats_FieldSelector(t *testing.T) {
+	labelSelector := labels.SelectorFromSet(labels.Set{"app": "web"})
+	fieldSelector := fields.OneTermEqualSelector("metadata.name", "web")
+
+	assertListRestrictions := func(t *testing.T, client *fake.Clientset, resource string) {
+		t.Helper()
+		for _, action := range client.Actions() {
+			list, ok := action.(k8stesting.ListAction)
+			if !ok || action.GetResource().Resource != resource {
+				continue
+			}
+			restrictions := list.GetListRestrictions()
+			if got := restrictions.Labels.String(); got != "app=web" {
+				t.Errorf("%s label selector = %q, want %q", resource, got, "app=web")
+			}
+			if got := restrictions.Fields.String(); got != "metadata.name=web" {
+				t.Errorf("%s field selector = %q, want %q", resource, got, "metadata.name=web")
+			}
+			return
+		}
+		t.Fatalf("no list action recorded for %s", resource)
+	}
+
+	t.Run("pods", func(t *testing.T) {
+		client := fake.NewSimpleClientset()
+		if _, err := CollectPodStats(context.Background(), client, nil, "default", labelSelector, fieldSelector); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertListRestrictions(t, client, "pods")
+	})
+
+	t.Run("deployments", func(t *testing.T) {
+		client := fake.NewSimpleClientset()
+		_, err := CollectDeploymentStats(context.Background(), client, "default", labelSelector, fieldSelector)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertListRestrictions(t, client, "deployments")
+	})
 }

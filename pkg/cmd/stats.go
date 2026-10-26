@@ -15,7 +15,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -60,14 +62,12 @@ func CollectPodStats(
 	metricsClient metricsclientset.Interface,
 	namespace string,
 	selector labels.Selector,
+	fieldSelector fields.Selector,
 ) ([]PodSummaryRow, error) {
-	// List pods in the namespace using the provided selector (if any).
+	// List pods in the namespace using the provided selectors (if any).
 	// Use ResourceVersion="0" to leverage the API server watch cache for
 	// consistent behavior with live views and better performance.
-	listOptions := metav1.ListOptions{ResourceVersion: "0"}
-	if selector != nil && !selector.Empty() {
-		listOptions.LabelSelector = selector.String()
-	}
+	listOptions := buildListOptions(selector, fieldSelector)
 
 	pods, err := k8sClient.CoreV1().Pods(namespace).List(ctx, listOptions)
 	if err != nil {
@@ -84,11 +84,13 @@ func CollectPodStats(
 		}
 	}
 
-	metricsMap := make(map[string]*metricsv1beta1.PodMetrics)
+	// Key by namespace and name: when listing all namespaces, pod names are
+	// not unique (e.g. StatefulSet pods such as redis-0).
+	metricsMap := make(map[types.NamespacedName]*metricsv1beta1.PodMetrics)
 	if podMetricsList != nil {
 		for i := range podMetricsList.Items {
 			pm := &podMetricsList.Items[i]
-			metricsMap[pm.Name] = pm
+			metricsMap[types.NamespacedName{Namespace: pm.Namespace, Name: pm.Name}] = pm
 		}
 	}
 
@@ -132,7 +134,7 @@ func CollectPodStats(
 			}
 		}
 
-		if pm, ok := metricsMap[pod.Name]; ok {
+		if pm, ok := metricsMap[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}]; ok {
 			for _, container := range pm.Containers {
 				cpuUsage.Add(container.Usage[v1.ResourceCPU])
 				memUsage.Add(container.Usage[v1.ResourceMemory])
@@ -168,13 +170,11 @@ func CollectDeploymentStats(
 	k8sClient kubernetes.Interface,
 	namespace string,
 	selector labels.Selector,
+	fieldSelector fields.Selector,
 ) ([]DeploymentSummaryRow, error) {
 	// Use ResourceVersion="0" to leverage the API server watch cache, matching
 	// the behavior used by live views for consistency and performance.
-	listOptions := metav1.ListOptions{ResourceVersion: "0"}
-	if selector != nil && !selector.Empty() {
-		listOptions.LabelSelector = selector.String()
-	}
+	listOptions := buildListOptions(selector, fieldSelector)
 
 	deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, listOptions)
 	if err != nil {
@@ -258,4 +258,17 @@ func CollectDeploymentStats(
 	}
 
 	return rows, nil
+}
+
+// buildListOptions returns list options that read from the API server watch
+// cache and apply the label and field selectors when they are non-empty.
+func buildListOptions(selector labels.Selector, fieldSelector fields.Selector) metav1.ListOptions {
+	listOptions := metav1.ListOptions{ResourceVersion: "0"}
+	if selector != nil && !selector.Empty() {
+		listOptions.LabelSelector = selector.String()
+	}
+	if fieldSelector != nil && !fieldSelector.Empty() {
+		listOptions.FieldSelector = fieldSelector.String()
+	}
+	return listOptions
 }

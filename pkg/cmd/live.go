@@ -1231,7 +1231,7 @@ func fetchPodData(
 	}
 
 	// Use shared aggregation helper so that static and live views stay in sync.
-	podSummaries, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, nil)
+	podSummaries, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, nil, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list pods: %w", err)
 	}
@@ -1898,7 +1898,7 @@ func fetchDeploymentData(
 	}
 
 	// Use shared aggregation helper so that static and live deployment views stay in sync.
-	deploySummaries, err := CollectDeploymentStats(ctx, k8sClient, namespace, nil)
+	deploySummaries, err := CollectDeploymentStats(ctx, k8sClient, namespace, nil, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list deployments: %w", err)
 	}

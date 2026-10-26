@@ -41,9 +41,9 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 				metricsClient = nil
 			}
 
-			selector, err := getLabelSelector()
+			selector, fieldSelector, err := getSelectors()
 			if err != nil {
-				return fmt.Errorf("invalid label/field selector: %w", err)
+				return err
 			}
 
 			// Determine namespace from kubeconfig/flags; empty means all namespaces.
@@ -54,7 +54,7 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 			}
 
 			ctx := context.Background()
-			rows, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, selector)
+			rows, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, selector, fieldSelector)
 			if err != nil {
 				return fmt.Errorf("failed to collect pod stats: %w", err)
 			}
@@ -98,9 +98,9 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 				return fmt.Errorf("failed to create kubernetes client: %w", err)
 			}
 
-			selector, err := getLabelSelector()
+			selector, fieldSelector, err := getSelectors()
 			if err != nil {
-				return fmt.Errorf("invalid label/field selector: %w", err)
+				return err
 			}
 
 			// Determine namespace from kubeconfig/flags; empty means all namespaces.
@@ -111,7 +111,7 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 			}
 
 			ctx := context.Background()
-			rows, err := CollectDeploymentStats(ctx, k8sClient, namespace, selector)
+			rows, err := CollectDeploymentStats(ctx, k8sClient, namespace, selector, fieldSelector)
 			if err != nil {
 				return fmt.Errorf("failed to collect deployment stats: %w", err)
 			}
