@@ -5,10 +5,10 @@
 # `glance` - kubectl plugin to view cluster resource allocation and usage
 
 [![Go Version](https://img.shields.io/badge/Go-1.26-blue.svg)](https://golang.org)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.31-blue.svg)](https://kubernetes.io)
+[![client-go](https://img.shields.io/badge/client--go-v0.37-blue.svg)](https://github.com/kubernetes/client-go)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization, and live monitoring. Provides quick insights into CPU and memory usage across nodes, namespaces, pods, and deployments.
+A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization, and live monitoring. Provides quick insights into CPU, memory, and GPU usage across nodes, namespaces, pods, and deployments, and shows where GPUs are wasted.
 
 > Note: Glance is developed on GitLab at https://gitlab.com/davidxarnold/glance and mirrored to GitHub at https://github.com/DavidXArnold/glance. Please open issues and feature requests on GitLab.
 
@@ -16,7 +16,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 
 - 📊 **Multiple Output Formats** - Text, Pretty tables, JSON, Dashboard, Pie charts, and more
 - 🔄 **Live Monitoring** - Real-time TUI with auto-refresh for continuous observation
-- 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, and Deployments
+- 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, Deployments, and GPUs
 - 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage with ratio formatting
 - 🎮 **GPU & Accelerator Support** - NVIDIA (including MIG and shared GPUs), AMD, Intel, AWS Neuron, Gaudi, and TPU resources with per-type counts, GPU model detection, and `--show-gpu` auto-detection
 - ☁️ **Cloud Provider Integration** - Optional AWS/GCP node metadata columns, enabled explicitly via flags or live view toggles
@@ -33,13 +33,16 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 - [Quick Start](#quick-start)
 - [Usage](#usage)
   - [Static View](#static-view)
+  - [GPUs and other accelerators](#gpus-and-other-accelerators)
   - [Live View](#live-view)
-- [Output Formats](#output-formats)
+- [Output Formats](#output-formats-1)
 - [Filtering and Selection](#filtering-and-selection)
 - [Cloud Provider Integration](#cloud-provider-integration)
+- [CLI Flags Reference](#cli-flags-reference)
 - [Configuration](#configuration)
 - [Examples](#examples)
-- [Requirements](#requirements)
+- [Requirements](#requirements-1)
+- [Performance and Scaling](#performance-and-scaling)
 - [Development](#development)
 - [License](#license)
 
@@ -97,13 +100,13 @@ In addition to the top-level node view, there are dedicated static commands for
 pods and deployments that mirror the live views but run once and exit:
 
 ```shell
-# Static pods view (all namespaces by default)
+# Static pods view (uses your kubeconfig context's namespace, like kubectl)
 kubectl glance pods
 
 # Static pods view for a specific namespace
 kubectl glance pods -n default
 
-# Static deployments view (all namespaces)
+# Static deployments view (kubeconfig context's namespace)
 kubectl glance deployments
 
 # Static deployments view for a specific namespace
@@ -126,19 +129,33 @@ kubectl glance deployments \
   -o pretty
 ```
 
-**Example Output (nodes):**
+**Example Output (nodes, `-o pretty`):**
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ CLUSTER: https://k8s.example.com:6443                                        │
-│ CPU: ████████░░░░░░░░░░░░ 44.4% (7.1/16)    Nodes: 3 Ready                   │
-│ MEM: ██████░░░░░░░░░░░░░░ 19.4% (6.1/31.4Gi)                                 │
-└──────────────────────────────────────────────────────────────────────────────┘
- NODE NAME       STATUS  PROVIDERID  ALLOCATABLE  ALLOCATABLE  ALLOCATED  ALLOCATED  USAGE   USAGE     
-                                     CPU          MEM          CPU REQ    CPU LIM    CPU     MEM       
- node-1          Ready   aws://...   4            8053040Ki    1.250      2.000      0.186   1172Mi 
- node-2          Ready   aws://...   4            8053040Ki    2.100      3.500      1.420   1856Mi
- node-3          Ready   aws://...   8            16106080Ki   3.750      6.000      2.340   3240Mi
- TOTALS                              16           32212160Ki   7.100      11.500     3.946   6268Mi
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                       glance (<) (<)   context: prod                         ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Host: https://k8s.example.com:6443  │  Version: v1.24.3+k3s1                ║
+║  Nodes: ● 1 Ready                                                            ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  CPU Usage:      [░░░░░░░░░░░░░░░░░░░░░░░░░░]   2.0%  (118m / 6.0)           ║
+║  CPU Allocated:  [░░░░░░░░░░░░░░░░░░░░░░░░░░]   3.3%  (200m / 6.0)           ║
+║                                                                              ║
+║  Mem Usage:      [██░░░░░░░░░░░░░░░░░░░░░░░░]  10.9%  (1.27Gi / 11.66Gi)     ║
+║  Mem Allocated:  [░░░░░░░░░░░░░░░░░░░░░░░░░░]   1.2%  (140.00Mi / 11.66Gi)   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+╭────────────────┬─────────┬──────────────┬────────────────────────────┬──────────────────────────────╮
+│ NODE           │ STATUS  │ VERSION      │ CPU UTILIZATION            │ MEMORY UTILIZATION           │
+├────────────────┼─────────┼──────────────┼────────────────────────────┼──────────────────────────────┤
+│ node-1         │ ✓ Ready │ v1.24.3+k3s1 │ ░░░░░░░░░░░░   2.0% █▅▁    │ ▓░░░░░░░░░░░  10.9% ▁█▁      │
+│                │         │              │ Req: 200m  Limit: 0        │ Req: 140.00Mi  Lim: 170.00Mi │
+├────────────────┼─────────┼──────────────┼────────────────────────────┼──────────────────────────────┤
+│ CLUSTER TOTALS │ 1 NODES │              │ USAGE:   2.0%  REQ:   3.3% │ USAGE:  10.9%  REQ:   1.2%   │
+│                │         │              │ 118M / 6.0                 │ 1.27GI / 11.66GI             │
+╰────────────────┴─────────┴──────────────┴────────────────────────────┴──────────────────────────────╯
+
+Legend: ■ <50%  ■ 50-75%  ■ 75-90%  ■ >90%  Sparkline: Req→Usage→Limit
 ```
 
 #### Output Formats
@@ -162,7 +179,7 @@ kubectl glance
 # Simple text output with ASCII borders
 kubectl glance -o txt
 
-# JSON output for automation (Totals.TotalUsageCPU from snapshot)
+# JSON output for automation
 kubectl glance -o json | jq '.Totals.TotalUsageCPU'
 
 # Visual dashboard
@@ -182,12 +199,8 @@ kubectl glance --show-cloud-provider=true
 # Explicitly hide cloud info columns (overriding config)
 kubectl glance --show-cloud-provider=false
 
-# Display pod-level resource details
-kubectl glance -p
-kubectl glance --pods
-
-# Show exact values instead of human-readable (e.g., 1000m vs 1)
-kubectl glance --exact
+# Show raw Kubernetes values instead of human-readable (e.g., 1500m vs 1.5)
+kubectl glance --raw            # --exact is an alias
 
 # Control node columns in static output (top-level kubectl glance)
 # VERSION is shown by default unless explicitly disabled.
@@ -199,7 +212,7 @@ kubectl glance --show-gpu                  # show GPU columns (auto-enabled when
 kubectl glance --gpu-resources 'example.com/npu,vendor.io/*'  # count extra device-plugin resources as GPUs
 
 # Combine options
-kubectl glance -c -p -o pretty --exact --show-node-age --show-node-group
+kubectl glance -c -o pretty --raw --show-node-age --show-node-group
 ```
 
 ### GPUs and other accelerators
@@ -240,7 +253,7 @@ It reports:
   have 8 free GPUs but cannot run a 4-GPU job.
 - **GPU nodes**: per node, requested and allocatable devices, free devices,
   and how many GPU and non-GPU pods it runs. DaemonSet pods (device plugins,
-  exporters) are not counted.
+  exporters) and static pods (such as kube-proxy on GKE) are not counted.
 - **Pending GPU pods**: unscheduled pods requesting accelerators, how long
   they have waited, the scheduler's reason, and whether a single node has
   enough free devices of that type (this check ignores taints and affinity).
@@ -269,7 +282,7 @@ kubectl glance live
 
 **Features:**
 - 🔄 Auto-refresh every 2 seconds (configurable)
-- 🎯 Four different view modes
+- 🎯 Five view modes
 - ⌨️ Keyboard-driven navigation
 - 📊 Live resource metrics from metrics-server
 - 📊 Visual progress bars with color indicators (🟢🟡🔴)
@@ -289,13 +302,14 @@ Switch between views using keyboard shortcuts:
 | **n** | Namespaces | Resource requests, limits, and usage per namespace (navigate with ↑↓, Enter to view) |
 | **p** | Pods | Resource requests, limits, and usage per pod with namespace selection |
 | **d** | Deployments | Deployment resources, replica counts, and availability status |
+| **G** | GPUs | GPU pools, GPU nodes, pending GPU pods, and wasted-GPU findings (see [Finding wasted GPUs](#finding-wasted-gpus)) |
 
 **Default View:** Nodes view shows cluster-wide node status on startup.
 
 **Namespace Navigation:**
 - In **Namespaces view**: Use ↑↓ arrows to select a namespace, press Enter to view pods in that namespace
 - In **Pods/Deployments views**: Use ←→ arrows to cycle through namespaces
-- Use `--namespace` or `-N` flag to start with a specific namespace
+- Use kubectl's `-n` / `--namespace` flag to start in a specific namespace (default: your kubeconfig context's namespace)
 
 **Sort Modes:**
 
@@ -314,32 +328,31 @@ At runtime in live view, use keys `1`–`4` to switch sort mode:
 
 #### Keyboard Controls
 
-|| Key | Action |
-||-----|--------|
-|| `n` | Switch to **Namespaces** view |
-|| `p` | Switch to **Pods** view |
-|| `o` | Switch to **Nodes** view |
-|| `d` | Switch to **Deployments** view |
-|| `G` | Switch to **GPUs** view (pools, GPU nodes, pending GPU pods, findings) |
-|| `b` | Toggle **progress bars** on/off |
-|| `%` | Toggle **percentages** on progress bars |
-|| `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
-|| `c` | Toggle **compact mode** (hide summary and help) |
-|| `w` | Toggle **cloud info** columns (Provider, Region, Instance Type, Capacity) |
-|| `v` | Toggle **node version** column (Kubelet version) |
-|| `a` | Toggle **node age** column (time since creation) |
-||| `g` | Toggle **node group/pool** column |
-||| `u` | Toggle **GPU resource** columns (requests/allocatable) |
-|| `1` | Sort by **Status** |
-|| `2` | Sort by **Name** |
-|| `3` | Sort by **CPU** |
-|| `4` | Sort by **Memory** |
-|| `?` | Open **settings modal** for advanced toggles |
-|| `+/-` | Increase/decrease display **limits** (nodes or pods by 10) |
-|| `↑↓` | Select namespace (in Namespaces view) |
-|| `Enter` | View pods for selected namespace (in Namespaces view) |
-|| `←→` | Navigate namespaces (in Pods/Deployments view) |
-|| `q` | Quit live view |
+| Key | Action |
+|-----|--------|
+| `n` | Switch to **Namespaces** view |
+| `p` | Switch to **Pods** view |
+| `o` | Switch to **Nodes** view |
+| `d` | Switch to **Deployments** view |
+| `G` | Switch to **GPUs** view (pools, GPU nodes, pending GPU pods, findings) |
+| `b` | Toggle **progress bars** on/off |
+| `%` | Toggle **percentages** on progress bars |
+| `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
+| `c` | Toggle **compact mode** (hide summary and help) |
+| `w` | Toggle **cloud info** columns (Provider, Region, Instance Type, Capacity) |
+| `v` | Toggle **node version** column (Kubelet version) |
+| `a` | Toggle **node age** column (time since creation) |
+| `g` | Toggle **node group/pool** column |
+| `u` | Toggle **GPU resource** columns (requests/allocatable) |
+| `1` | Sort by **Status** |
+| `2` | Sort by **Name** |
+| `3` | Sort by **CPU** |
+| `4` | Sort by **Memory** |
+| `?` / `h` | Open the **settings panel** (all toggles, plus node and pod display limits); `s` saves, `Esc` closes |
+| `↑↓` | Select namespace (in Namespaces view) |
+| `Enter` | View pods for selected namespace (in Namespaces view) |
+| `←→` | Navigate namespaces (in Pods/Deployments view) |
+| `q` | Quit live view |
 
 #### Display Features
 
@@ -392,33 +405,22 @@ kubectl glance live
 # Progress bars show capacity utilization
 ```
 
-#### Visual Example
+#### Screen Layout
 
-The live view now includes a cluster summary dashboard and color-coded progress bars:
+The live view has four parts, top to bottom:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ CLUSTER SUMMARY                                                              │
-│ CPU: 🟢 ████████░░░░░░░░ 45.2% (7.2/16 cores)  Nodes: ✓ 3 healthy          │
-│ MEM: 🟡 ██████████████░░ 72.5% (23.2/32 Gi)    Pods: 42 running            │
-└─────────────────────────────────────────────────────────────────────────────┘
+1. **Summary bar**: context, cluster/provider, node and pod counts, and the
+   current namespace (Pods and Deployments views).
+2. **Table** for the current view. With progress bars on (`b`), each
+   resource row gets bars underneath, colored by utilization.
+3. **Status bar**: view name, refresh time, sort mode, and how many
+   nodes/pods are shown when a limit applies (e.g. `Viewing Nodes: 20/150`).
+4. **Menu**: view keys, toggles, and sort keys.
 
-NODE         STATUS      CPU CAP  CPU ALLOC  CPU USE  MEM CAP  MEM ALLOC  MEM USE  PODS
-node-1       ✓ Ready     4        2.5        1.8      8Gi      4Gi        3.2Gi    15
-             🟡 ████████████░░░░  45%
-             🟡 ██████████████░░  63%
-             🟢 ██████████░░░░░░  45%
-
-node-2       ✓ Ready     4        3.0        2.1      8Gi      6Gi        5.8Gi    18
-             🟡 ████████████████  75%
-             🔴 ██████████████████ 95%
-             🟡 ██████████████░░  73%
-```
-
-**Color Indicators:**
-- 🟢 Green: < 50% utilization (healthy)
-- 🟡 Yellow: 50-90% utilization (warning)
-- 🔴 Red: > 90% utilization (critical)
+**Color Indicators** (live progress bars):
+- 🟢 Green: < 50% utilization
+- 🟡 Yellow: 50-90% utilization
+- 🔴 Red: > 90% utilization
 
 **Status Icons:**
 - ✓ Ready / ⊘ NotReady (nodes)
@@ -455,6 +457,13 @@ The bars use Unicode block characters (█ for filled, ░ for empty) to provide
 - Ready replica count
 - Available replica count
 - Navigate namespaces with ←→ arrows
+
+**GPUs View** (`G`)
+- GPU pools per model and accelerator type: requested, free, and the largest free block
+- GPU nodes with free devices and GPU vs. non-GPU pod counts
+- Pending GPU pods and whether they fit
+- Findings: idle GPU nodes, fragmentation, and unavailable free GPUs
+
 ## Output Formats
 
 Glance supports multiple output formats for different use cases:
@@ -497,10 +506,13 @@ Machine-readable JSON output perfect for automation, monitoring systems, and scr
 kubectl glance -o json
 
 # Example: Extract total CPU usage with jq
-kubectl glance -o json | jq -r '.totals.totalUsageCPU'
+kubectl glance -o json | jq -r '.Totals.TotalUsageCPU'
 
 # Example: Get all node stats
-kubectl glance -o json | jq '.nodeMap'
+kubectl glance -o json | jq '.Nodes'
+
+# Example: GPU allocation per model and accelerator type
+kubectl glance -o json | jq '.Totals.GPUGroups'
 ```
 
 **JSON Structure (simplified):**
@@ -574,15 +586,16 @@ kubectl glance -l app=myapp
 # Filter by specific field values
 kubectl glance --field-selector metadata.name=node-1
 
-# Multiple field selectors
-kubectl glance --field-selector status.phase=Running,spec.nodeName=node-1
+# Field selectors apply to the listed resource: nodes for kubectl glance,
+# pods for kubectl glance pods
+kubectl glance pods --field-selector status.phase=Running,spec.nodeName=node-1
 ```
 
 ### Combined Filtering
 
 ```shell
 # Combine label and field selectors
-kubectl glance --selector app=nginx --field-selector status.phase=Running -o pretty
+kubectl glance pods --selector app=nginx --field-selector status.phase=Running -o pretty
 ```
 
 ## Cloud Provider Integration
@@ -644,30 +657,35 @@ kubectl glance -o json \
 
 ### Static View Flags
 
-|||| Flag | Short | Default | Description |
-||||------|-------|---------|-------------|
-|||| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
-|||| `--show-cloud-provider` | `-c` | `false` | Display cloud provider metadata (AWS/GCP instance types, regions) when set to true; off by default |
-||| `--pods` | `-p` | `false` | Display pod-level resource details in static node view (root `kubectl glance`) |
-||| `--exact` | | `false` | Show exact Kubernetes resource values instead of human-readable |
-||| `--selector` | `-l` | | Label selector for filtering (e.g., `app=nginx`) |
-||| `--field-selector` | | | Field selector for filtering (e.g., `status.phase=Running`) |
-||| `--show-node-version` | | *unset* (treated as "show") | Control VERSION column in static output: when explicitly set to `false`, hides the VERSION column; when unset or `true`, VERSION is shown |
-||| `--show-node-age` | | `false` | Show AGE column (node creation time) in static output |
-|||| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
-|||| `--show-gpu` | | `false` | Show GPU resource columns (auto-enabled when GPU nodes are detected) |
-|||| `--gpu-resources` | | | Extra extended resource names or glob patterns to count as GPUs/accelerators (e.g. `example.com/npu,vendor.io/*`) |
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--output` | `-o` | `pretty` | Output format: `txt`, `pretty`, `json`, `dash`, `pie`, `chart` |
+| `--selector` | `-l` | | Label selector (e.g., `app=nginx`) |
+| `--field-selector` | | | Field selector (e.g., `metadata.name=node-1`) |
+| `--show-cloud-provider` | `-c` | `false` | Show cloud provider columns (AWS/GCP instance type, region, capacity type) |
+| `--raw` | | `false` | Show raw Kubernetes resource values (e.g., `1500m`, `2048Mi`) |
+| `--exact` | | `false` | Alias for `--raw` |
+| `--show-node-version` | | *unset* (shown) | VERSION column; set `false` to hide it |
+| `--show-node-age` | | `false` | Show AGE column (node creation time) |
+| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) |
+| `--show-gpu` | | `false` | Show GPU columns (auto-enabled when GPU nodes are detected) |
+| `--gpu-resources` | | | Extra extended resource names or glob patterns to count as GPUs/accelerators (e.g. `example.com/npu,vendor.io/*`) |
+| `--config` | | `~/.glance/config` | Path to the glance config file |
 
-**Static subcommands** (`kubectl glance pods`, `kubectl glance deployments`) reuse
-these selectors and output flags, and additionally honor the global `--namespace`
-flag from kubectl/genericclioptions.
+Standard kubectl flags are also accepted: `--context`, `--kubeconfig`,
+`-n/--namespace`, `--cluster`, `--user`, `--request-timeout`, and so on.
+
+**Static subcommands** (`kubectl glance pods`, `kubectl glance deployments`,
+`kubectl glance gpus`) accept the same flags. `pods` and `deployments` are scoped
+to `-n/--namespace` (default: your kubeconfig context's namespace); `gpus` covers
+all namespaces and applies the selectors to nodes.
 
 ### Live View Flags
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--refresh` | `-r` | `2` | Refresh interval in seconds |
-| `--namespace` | `-N` | | Initial namespace for pods/deployments view (empty = all namespaces) |
+| `--namespace` | `-n` | context namespace | Initial namespace for the Pods/Deployments views (standard kubectl flag) |
 | `--node-limit` | | `20` | Maximum number of nodes to display (0 = unlimited) |
 | `--pod-limit` | | `100` | Maximum number of pods to display (0 = unlimited) |
 | `--sort-by` | | `status` | Sort mode: `status`, `name`, `cpu`, `memory` |
@@ -689,10 +707,6 @@ Glance respects standard Kubernetes environment variables:
 export KUBECONFIG=~/.kube/config-production
 kubectl glance
 
-# Set default namespace
-export KUBECTL_NAMESPACE=my-namespace
-kubectl glance
-
 # Set log level (trace, debug, info, warn, error, fatal)
 # When set to debug or info, logs are written to ~/.glance/<level>-glance.log
 export GLANCE_LOG_LEVEL=debug
@@ -701,7 +715,7 @@ kubectl glance
 
 ### Config File
 
-Create `~/.glance/config` for persistent configuration (YAML format). This file is loaded automatically unless you override it with `--config`. If it does not exist, Glance will create it on first write (for example, when you toggle live view settings).
+Create `~/.glance/config` for persistent configuration (YAML format). This file is loaded automatically unless you point at another file with `--config <path>`. If it does not exist, Glance will create it on first write (for example, when you toggle live view settings).
 
 ```yaml
 selector: "environment=production"
@@ -709,9 +723,8 @@ output: pretty
 # show-cloud-provider defaults to false when omitted
 # set explicitly to true/false to control behavior
 show-cloud-provider: true
-exact: false
+show-raw: false  # raw Kubernetes values (same as --raw/--exact)
 log-level: warn  # trace, debug, info, warn, error, fatal
-namespace: ""    # Initial namespace for live view (empty = all namespaces)
 
 # Cloud info caching (live mode only)
 cloud-cache-ttl: 5m      # TTL for cloud provider info cache (default: 5m)
@@ -768,13 +781,11 @@ kubectl glance live
 # Press 'p' for pods, then navigate to production namespace
 
 # Check specific application resources
-kubectl glance --selector app=nginx -p -o pretty
+kubectl glance pods --selector app=nginx -o pretty
 
 # Export cluster state for reporting
 kubectl glance -o json > cluster-report-$(date +%Y%m%d).json
 
-# Compare resource requests vs usage
-kubectl glance -o pretty | grep -E "ALLOCATED|USAGE"
 
 # Monitor cluster during deployment
 kubectl glance live -r 1  # 1-second refresh
@@ -782,20 +793,29 @@ kubectl glance live -r 1  # 1-second refresh
 # Check nodes with cloud info
 kubectl glance -c --field-selector metadata.name=node-1
 
-# Get exact values for billing/capacity planning
-kubectl glance --exact -o json > capacity-report.json
+# Get raw values for billing/capacity planning
+kubectl glance --raw -o json > capacity-report.json
+
+# Find idle or fragmented GPU capacity
+kubectl glance gpus
 ```
 
 ### Automation Examples
 
 ```bash
 #!/bin/bash
-# Alert if CPU usage exceeds 80%
+# Alert if cluster CPU usage exceeds 80% of allocatable
+# (--raw prints Kubernetes quantities such as "4", "1500m", or "109600u")
 
-USAGE=$(kubectl glance -o json | jq -r '.totals.totalUsageCPU' | cut -d'.' -f1)
-if [ "$USAGE" -gt 80 ]; then
-  echo "ALERT: CPU usage at ${USAGE}%"
-  # Send notification...
+pct=$(kubectl glance --raw -o json | jq -r '
+  def cores:
+    if endswith("n") then (.[:-1] | tonumber) / 1e9
+    elif endswith("u") then (.[:-1] | tonumber) / 1e6
+    elif endswith("m") then (.[:-1] | tonumber) / 1e3
+    else tonumber end;
+  (.Totals.TotalUsageCPU | cores) / (.Totals.TotalAllocatableCPU | cores) * 100 | floor')
+if [ "$pct" -gt 80 ]; then
+  echo "ALERT: cluster CPU usage at ${pct}%"
 fi
 ```
 
@@ -803,13 +823,14 @@ fi
 #!/bin/bash
 # Daily capacity report
 
-kubectl glance --exact -o json | jq '{
-  date: now | strftime("%Y-%m-%d"),
-  totalNodes: .nodeMap | length,
-  totalCPU: .totals.totalAllocatableCPU,
-  usedCPU: .totals.totalUsageCPU,
-  totalMemory: .totals.totalAllocatableMemory,
-  usedMemory: .totals.totalUsageMemory
+kubectl glance --raw -o json | jq '{
+  date: (now | strftime("%Y-%m-%d")),
+  totalNodes: (.Nodes | length),
+  totalCPU: .Totals.TotalAllocatableCPU,
+  usedCPU: .Totals.TotalUsageCPU,
+  totalMemory: .Totals.TotalAllocatableMemory,
+  usedMemory: .Totals.TotalUsageMemory,
+  gpus: .Totals.GPUGroups
 }' > capacity-$(date +%Y%m%d).json
 ```
 
@@ -817,8 +838,11 @@ kubectl glance --exact -o json | jq '{
 
 ### Cluster Requirements
 
-- **Kubernetes**: 1.12 or higher (tested with 1.31)
-- **Metrics Server**: **Required for glance to operate** (all modes)
+- **Kubernetes**: built with client-go v0.37 (Kubernetes 1.37 libraries). Glance only reads core
+  APIs (nodes, pods, deployments, metrics), so older clusters generally work; development and
+  testing currently use k3s 1.24.
+- **Metrics Server**: required by the node view (`kubectl glance`) and for usage columns in live mode.
+  `kubectl glance gpus`, `pods`, and `deployments` work without it (usage shows as 0).
   - Install: `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`
   - Or see the Kubernetes [metrics-server project] or your cloud provider's documentation for managed metrics add-ons
 
@@ -867,16 +891,16 @@ Glance is optimized for large Kubernetes clusters with advanced performance feat
 | < 20 nodes | ~1-2 seconds | Default settings work great |
 | 20-100 nodes | ~2-4 seconds | Use default `--node-limit=20` for live view |
 | 100-500 nodes | ~5-10 seconds | Increase `--node-limit` as needed, use `--sort-by` strategically |
-| 500+ nodes | ~10-20 seconds | Consider watch cache mode (future feature), use higher `--max-concurrent` |
+| 500+ nodes | ~10-20 seconds | Use a higher `--max-concurrent` and keep `--node-limit` modest |
 
 ### Large Cluster Detection
 
 Glance automatically detects large clusters (>100 nodes) and warns about performance considerations:
 
 ```shell
-# For clusters with 100+ nodes, glance shows a warning:
-WARN Large cluster detected (150 nodes). Using --node-limit=20 for performance.
-Consider using --watch mode for real-time updates with lower API load.
+# For clusters with 100+ nodes, glance logs a warning:
+WARN Large cluster detected (150 nodes). Showing at most 20 nodes (--node-limit);
+raise it with --node-limit or in the settings panel ([?]).
 ```
 
 ### Tuning for Large Clusters
@@ -923,13 +947,19 @@ glance/
 ├── cmd/                 # Main application entry point
 ├── pkg/
 │   ├── cmd/            # CLI wiring and views
-│   │   ├── glance.go   # Root command and static view
+│   │   ├── glance.go   # Root command and static node view
+│   │   ├── pods.go     # Static pods and deployments commands
+│   │   ├── gpus.go     # Static gpus command and GPU report rendering
 │   │   ├── live.go     # Live TUI implementation
+│   │   ├── stats.go    # Shared pod/deployment aggregation (static + live)
 │   │   ├── render.go   # Output formatting
-│   │   └── types.go    # Thin aliases over core domain types
+│   │   ├── watch.go    # Informer-based cache (not yet wired in, see #41)
+│   │   └── types.go    # Thin aliases over core types, shared constants
 │   ├── core/           # Core domain types and aggregation (UI-agnostic)
 │   │   ├── types.go    # NodeStats, Totals, Snapshot, etc.
-│   │   └── aggregate_nodes.go  # ComputeNodeSnapshot and helpers
+│   │   ├── aggregate_nodes.go  # ComputeNodeSnapshot and helpers
+│   │   ├── accelerators.go     # GPU/accelerator detection, pod requests, GPU models
+│   │   └── gpu_report.go       # BuildGPUReport (pools, pending pods, findings)
 │   ├── cloud/          # Cloud provider integration + caching
 │   │   ├── aws.go      # AWS metadata provider
 │   │   ├── gce.go      # GCP metadata provider
@@ -965,56 +995,40 @@ go test ./pkg/cmd -run TestLive
 
 ### Releasing
 
-The project uses GitLab CI/CD to automate releases. Here's how to create a new release:
+Releases are cut from `main` by pushing a semver tag; GitLab CI does the rest.
+`AGENTS.md` has the full checklist.
 
-#### Prerequisites
+#### Before tagging
 
-- `GL_CI_TOKEN` CI/CD variable set in GitLab with write access to the repository
-- Version updated in `version/version.go`
+1. Make sure `CHANGELOG.md` and `README.md` are up to date for everything in
+   the release:
+   - Move `[Unreleased]` entries into a new `## [X.Y.Z] - YYYY-MM-DD` section
+     and leave an empty `[Unreleased]` section at the top.
+   - Check the README sections the release touches: commands, the flags
+     reference, keyboard shortcuts, config example, and requirements.
+2. Update `version/version.go` to `X.Y.Z`.
+3. Run `make check`.
 
-#### Manual Release (Local)
-
-```shell
-# 1. Update version in version/version.go
-vim version/version.go
-
-# 2. Build all platforms, create archives, generate checksums, update krew manifest
-make release
-
-# 3. Review the updated krew manifest
-cat plugins/krew/glance.yaml
-
-# 4. Commit and tag
-git add -A && git commit -m "Release v$(make release_version)"
-make tag-release
-git push && git push --tags
-
-# 5. Upload archives to GitLab release page
-# Files are in: target/archives/
-```
-
-#### Automated Release (CI/CD)
-
-Simply push a version tag to trigger the full release pipeline:
+#### Tag and push
 
 ```shell
-# 1. Update version in version/version.go and commit
-vim version/version.go
-git add -A && git commit -m "Prepare release v0.1.0"
-git push
-
-# 2. Create and push tag (triggers release)
-git tag v0.1.0
-git push --tags
+git commit -am "chore: bump version to X.Y.Z"
+git push origin main
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The CI pipeline will automatically:
-1. Run lint and tests
-2. Build binaries for all platforms (darwin/linux amd64/arm64, windows amd64)
-3. Create `.tar.gz` archives
-4. Generate SHA256 checksums
-5. Create a GitLab Release with downloadable artifacts
-6. Update the krew manifest with new version and checksums
+The CI pipeline then:
+1. Runs lint and tests
+2. Builds binaries for all platforms (darwin/linux amd64/arm64, windows amd64)
+3. Creates `.tar.gz` archives with SHA256 checksums
+4. Creates a GitLab Release with downloadable artifacts
+5. Updates `plugins/krew/glance.yaml` on `main` with the new version and checksums
+6. Mirrors the tag and `main` to GitHub, where the krew-release-bot workflow
+   waits for the manifest and opens a PR in
+   [kubernetes-sigs/krew-index](https://github.com/kubernetes-sigs/krew-index)
+
+If the krew bot times out, re-run the `krew-release-bot` workflow on GitHub
+with the release tag selected as the ref.
 
 #### Release Artifacts
 
@@ -1034,19 +1048,10 @@ The CI pipeline will automatically:
 | `make archive-all` | Create archives (depends on build-all) |
 | `make checksums` | Generate SHA256 checksums (depends on archive-all) |
 | `make krew-plugin` | Update krew manifest with checksums (depends on checksums) |
-| `make release` | Full release pipeline (build → archive → checksum → manifest) |
+| `make release` | Local release build (build → archive → checksum → manifest); CI does this on tags |
 | `make krew-validate` | Test krew manifest locally |
 | `make krew-reset` | Reset krew manifest to git version |
 | `make clean` | Remove build artifacts |
-
-#### Submitting to Krew Index
-
-After creating a release:
-
-1. Fork [kubernetes-sigs/krew-index](https://github.com/kubernetes-sigs/krew-index)
-2. Copy `plugins/krew/glance.yaml` to `plugins/glance.yaml` in your fork
-3. Submit a PR to the krew-index repository
-4. Wait for review and approval
 
 ## License
 
@@ -1061,6 +1066,7 @@ Apache License 2.0 - See [LICENSE](LICENSE) for details.
 
 Built with:
 - [Cobra](https://github.com/spf13/cobra) - CLI framework
+- [component-helpers](https://github.com/kubernetes/component-helpers) - Scheduler-accurate pod resource requests
 - [termui](https://github.com/gizak/termui) - Terminal UI components
 - [go-pretty](https://github.com/jedib0t/go-pretty) - Table rendering
 - [client-go](https://github.com/kubernetes/client-go) - Kubernetes API client

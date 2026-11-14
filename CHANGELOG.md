@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `-l` shorthand for `--selector`, matching kubectl (the README already used it).
+- `--config <path>` flag to load a config file other than `~/.glance/config`.
+
+### Changed
+- Live mode's large-cluster warning no longer suggests a `--watch` mode that does not exist; it points to `--node-limit` and the settings panel instead.
+- `kubectl glance live --help` lists the GPUs view and describes the default namespace correctly (the kubeconfig context's namespace).
+- README brought up to date: removed the nonexistent `-p/--pods`, `-N`, `+/-` keys and `KUBECTL_NAMESPACE`; documented `--raw`, `--config`, the GPUs view, and metrics-server requirements per command; fixed the JSON/jq examples and automation scripts; replaced stale example output; refreshed the release process, project structure, and flag/key tables.
+
 ## [0.4.0] - 2026-11-14
 
 ### Added
@@ -79,7 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Resynchronized version constants and git tags by bumping `version/version.go` to 0.2.6 so the next release matches the latest published tags.
 
-## [0.2.4] - 2026-01-27
+## [0.2.5] - 2026-01-27
+
+Tagged `v0.2.5`; the binary reports version 0.2.4 because `version/version.go` was not bumped.
 
 ### Changed
 - Documented Krew release flow and added GitHub krew-release-bot workflow for automated krew-index PRs.
@@ -256,9 +267,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    - Move items from `[Unreleased]` to new version section
    - Add release date
    - Create new empty `[Unreleased]` section at top
-3. Commit changes: `git commit -m "chore: bump version to X.Y.Z"`
-4. Create and push tag: `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`
-5. CI automatically builds, creates release, and updates Krew manifest
+   - Add a comparison link for the new version at the bottom of this file
+   - Check entries are in the right section after any rebase or merge
+3. Update `README.md` for every user-visible change in the release (commands,
+   flags reference, keyboard shortcuts, config example, requirements)
+4. Commit changes: `git commit -m "chore: bump version to X.Y.Z"`
+5. Create and push tag: `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`
+6. CI automatically builds, creates the release, updates the Krew manifest, and opens the krew-index PR
 
 **Version naming:**
 - **Patch** (0.1.X): Bug fixes, minor improvements
@@ -272,3 +287,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Removed**: Removed features
 - **Fixed**: Bug fixes
 - **Security**: Security fixes
+
+[Unreleased]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.0...main
+[0.4.0]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.3...v0.4.0
+[0.3.3]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.2...v0.3.3
+[0.3.2]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.1...v0.3.2
+[0.3.1]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.0...v0.3.1
+[0.3.0]: https://gitlab.com/davidxarnold/glance/-/compare/v0.2.6...v0.3.0
+[0.2.6]: https://gitlab.com/davidxarnold/glance/-/compare/v0.2.5...v0.2.6
+[0.2.5]: https://gitlab.com/davidxarnold/glance/-/compare/v0.2.3...v0.2.5
+[0.2.3]: https://gitlab.com/davidxarnold/glance/-/compare/v0.2.2...v0.2.3
+[0.2.2]: https://gitlab.com/davidxarnold/glance/-/compare/v0.2.1...v0.2.2
+[0.2.1]: https://gitlab.com/davidxarnold/glance/-/compare/v0.2.0...v0.2.1
+[0.2.0]: https://gitlab.com/davidxarnold/glance/-/compare/v0.1.20...v0.2.0
+[0.1.20]: https://gitlab.com/davidxarnold/glance/-/compare/v0.1.19...v0.1.20
+[0.1.19]: https://gitlab.com/davidxarnold/glance/-/compare/v0.1.18...v0.1.19
+[0.1.18]: https://gitlab.com/davidxarnold/glance/-/compare/v0.1.17...v0.1.18
+[0.1.17]: https://gitlab.com/davidxarnold/glance/-/compare/v0.1.16...v0.1.17
+[0.1.16]: https://gitlab.com/davidxarnold/glance/-/compare/v0.1.15...v0.1.16
+[0.1.15]: https://gitlab.com/davidxarnold/glance/-/tags/v0.1.15

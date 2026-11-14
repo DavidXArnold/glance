@@ -224,8 +224,8 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 			"(e.g. --field-selector key1=value1,key2=value2). "+
 			"The server only supports a limited number of field queries per type.")
 	_ = viper.BindPFlag("field-selector", cmd.PersistentFlags().Lookup("field-selector"))
-	cmd.PersistentFlags().StringVar(
-		labelSelector, "selector", "",
+	cmd.PersistentFlags().StringVarP(
+		labelSelector, "selector", "l", "",
 		"Selector (label query) to filter on, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2)")
 	cmd.PersistentFlags().StringVarP(
 		output, "output", "o", "pretty",
@@ -263,6 +263,9 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	var exactValues bool
 	cmd.PersistentFlags().BoolVar(&showRaw, "raw", false, "Show raw Kubernetes resource values (e.g., 1500m, 2048Mi)")
 	cmd.PersistentFlags().BoolVar(&exactValues, "exact", false, "Alias for --raw")
+
+	cmd.PersistentFlags().StringVar(&cfgFile, "config", "",
+		"Path to the glance config file (default ~/.glance/config)")
 
 	cobra.OnInitialize(initConfig)
 
