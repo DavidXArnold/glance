@@ -30,6 +30,7 @@ import (
 	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
 	"golang.org/x/sync/errgroup"
+	"gopkg.in/inf.v0"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -532,14 +533,6 @@ func handleRightArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
 	if state.mode == ViewPods || state.mode == ViewDeployments {
 		state.selectedNamespace = getNextNamespace(k8sClient, state.selectedNamespace)
 	}
-}
-
-// min returns the minimum of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // fetchViewData fetches the header, rows, and per-row metrics for the current view.
@@ -1271,28 +1264,10 @@ func fetchPodData(
 	}
 
 	// Sort based on sort mode
-	switch state.sortMode {
-	case SortByStatus:
-		// Non-running pods first (Pending, Failed, etc.)
-		sort.Slice(podData, func(i, j int) bool {
-			if podData[i].isRunning != podData[j].isRunning {
-				return !podData[i].isRunning
-			}
-			return podData[i].cpuUsage > podData[j].cpuUsage
-		})
-	case SortByName:
-		sort.Slice(podData, func(i, j int) bool {
-			return podData[i].row[0] < podData[j].row[0]
-		})
-	case SortByCPU:
-		sort.Slice(podData, func(i, j int) bool {
-			return podData[i].cpuUsage > podData[j].cpuUsage
-		})
-	case SortByMemory:
-		sort.Slice(podData, func(i, j int) bool {
-			return podData[i].memUsage > podData[j].memUsage
-		})
-	}
+	// Status sort puts non-running pods (Pending, Failed, etc.) first.
+	sortRowsByMode(podData, state.sortMode, func(p *podRowData) rowSortKey {
+		return rowSortKey{healthy: p.isRunning, name: p.row[0], cpu: p.cpuUsage, mem: p.memUsage}
+	})
 
 	// Apply pod limit
 	limit := len(podData)
@@ -1827,28 +1802,45 @@ func filterNodeData(data []nodeRowData, state *LiveState) []nodeRowData {
 
 // sortNodeData sorts node data based on sort mode
 func sortNodeData(data []nodeRowData, mode SortMode) {
+	// Status sort puts NotReady nodes first.
+	sortRowsByMode(data, mode, func(n *nodeRowData) rowSortKey {
+		return rowSortKey{healthy: n.isReady, name: n.row[0], cpu: n.cpuUsage, mem: n.memUsage}
+	})
+}
+
+// rowSortKey holds the fields that the live view sort modes compare.
+type rowSortKey struct {
+	healthy  bool
+	name     string
+	cpu, mem float64
+}
+
+// sortRowsByMode sorts rows for a sort mode. Status sort puts unhealthy rows
+// first, then orders by CPU usage descending; CPU and memory sort descending.
+func sortRowsByMode[T any](data []T, mode SortMode, key func(*T) rowSortKey) {
 	switch mode {
-	case SortByStatus:
-		// NotReady nodes first, then by CPU usage descending
-		sort.Slice(data, func(i, j int) bool {
-			if data[i].isReady != data[j].isReady {
-				return !data[i].isReady // NotReady first
-			}
-			return data[i].cpuUsage > data[j].cpuUsage
-		})
-	case SortByName:
-		sort.Slice(data, func(i, j int) bool {
-			return data[i].row[0] < data[j].row[0]
-		})
-	case SortByCPU:
-		sort.Slice(data, func(i, j int) bool {
-			return data[i].cpuUsage > data[j].cpuUsage
-		})
-	case SortByMemory:
-		sort.Slice(data, func(i, j int) bool {
-			return data[i].memUsage > data[j].memUsage
-		})
+	case SortByStatus, SortByName, SortByCPU, SortByMemory:
+	default:
+		return
 	}
+	less := func(i, j int) bool {
+		a, b := key(&data[i]), key(&data[j])
+		switch mode {
+		case SortByStatus:
+			if a.healthy != b.healthy {
+				return !a.healthy
+			}
+			return a.cpu > b.cpu
+		case SortByName:
+			return a.name < b.name
+		case SortByCPU:
+			return a.cpu > b.cpu
+		case SortByMemory:
+			return a.mem > b.mem
+		}
+		return false
+	}
+	sort.Slice(data, less)
 }
 
 func fetchDeploymentData(
@@ -1986,7 +1978,7 @@ func getNextNamespace(k8sClient *kubernetes.Clientset, current string) string {
 // formatResourceRatio formats CPU or memory as "used / total" ratio
 // For CPU: "10.2 / 17" (cores)
 // For memory: "44.7Gi / 66Gi" (binary units)
-func formatResourceRatio(used, total *resource.Quantity, isMemory bool, showRaw bool) string {
+func formatResourceRatio(used, total *resource.Quantity, isMemory, showRaw bool) string {
 	if showRaw {
 		// Raw mode: show Kubernetes resource strings
 		usedStr := "0"
@@ -2048,10 +2040,9 @@ func multiplyQuantity(q *resource.Quantity, multiplier int) *resource.Quantity {
 	if q == nil {
 		return resource.NewQuantity(0, resource.BinarySI)
 	}
-	result := q.DeepCopy()
-	val := result.Value()
-	result.Set(val * int64(multiplier))
-	return &result
+	// Multiply exactly: Value() would round 100m up to one whole core.
+	product := new(inf.Dec).Mul(q.AsDec(), inf.NewDec(int64(multiplier), 0))
+	return resource.NewDecimalQuantity(*product, q.Format)
 }
 
 // addProgressBars adds visual progress bars under resource values
@@ -2119,15 +2110,15 @@ func addProgressBars(
 }
 
 // makeProgressBar creates a visual progress bar with color indicator
-func makeProgressBar(value, max float64, width int, showPercentage bool) string {
-	if max == 0 {
+func makeProgressBar(value, maxValue float64, width int, showPercentage bool) string {
+	if maxValue == 0 {
 		if showPercentage {
 			return "  0%"
 		}
 		return ""
 	}
 
-	percentage := (value / max) * 100
+	percentage := (value / maxValue) * 100
 	if percentage > 100 {
 		percentage = 100
 	}
@@ -2201,8 +2192,11 @@ func getStatusIcon(status string) string {
 		return statusRunning + " "
 	case "Pending":
 		return statusPending + " "
-	case "Failed", "Error", "CrashLoopBackOff":
+	case "Failed", "Error", "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull",
+		"OOMKilled", "CreateContainerConfigError", "Evicted":
 		return statusFailed + " "
+	case podStatusTerminating:
+		return statusPending + " "
 	case nodeStatusReady:
 		return statusReady + " "
 	case nodeStatusNotReady:
@@ -2272,19 +2266,57 @@ func saveAllSettings(state *LiveState) {
 	writeConfigSafe()
 }
 
-// updateModalScroll adjusts scroll offset to keep selected row visible.
-func updateModalScroll(state *LiveState, totalRows, visibleRows int) {
-	if state.modalSelectedRow < state.modalScrollOffset {
-		state.modalScrollOffset = state.modalSelectedRow
+// settingsModalChrome is the number of terminal lines the settings modal uses
+// besides its scrolling rows: two borders, the pinned header row, and a
+// one-line margin above and below.
+const settingsModalChrome = 5
+
+// settingsVisibleRows returns how many settings rows (excluding the pinned
+// header) fit on screen. dataRows is the number of rows after the header.
+func settingsVisibleRows(termHeight, dataRows int) int {
+	visible := termHeight - settingsModalChrome
+	if visible < 1 {
+		visible = 1
 	}
-	if state.modalSelectedRow >= state.modalScrollOffset+visibleRows {
-		state.modalScrollOffset = state.modalSelectedRow - visibleRows + 1
+	if visible > dataRows {
+		visible = dataRows
+	}
+	return visible
+}
+
+// isSelectableSettingsRow reports whether a settings row is an actual setting
+// rather than the header, a blank spacer, or a category title.
+func isSelectableSettingsRow(row []string) bool {
+	return len(row) > 1 && row[1] != "" && row[0] == ""
+}
+
+// updateModalScroll adjusts the scroll offset so the selected row stays
+// visible. Offsets index the rows after the pinned header (allRows[1:]).
+func updateModalScroll(state *LiveState, allRows [][]string, visibleRows int) {
+	dataRows := len(allRows) - 1
+	selected := state.modalSelectedRow - 1
+	if selected < state.modalScrollOffset {
+		state.modalScrollOffset = selected
+		// Scrolling back to the first setting: show its category title too.
+		firstSetting := true
+		for i := 1; i < state.modalSelectedRow; i++ {
+			if isSelectableSettingsRow(allRows[i]) {
+				firstSetting = false
+				break
+			}
+		}
+		if firstSetting {
+			state.modalScrollOffset = 0
+		}
+	}
+	if selected >= state.modalScrollOffset+visibleRows {
+		state.modalScrollOffset = selected - visibleRows + 1
+	}
+	if state.modalScrollOffset > dataRows-visibleRows {
+		state.modalScrollOffset = dataRows - visibleRows
 	}
 	if state.modalScrollOffset < 0 {
 		state.modalScrollOffset = 0
-	}
-	if state.modalScrollOffset > totalRows-visibleRows && totalRows > visibleRows {
-		state.modalScrollOffset = totalRows - visibleRows
 	}
 }
 
@@ -2323,12 +2355,14 @@ func buildSettingsRows(state *LiveState) [][]string {
 	return rows
 }
 
-// boolToCheckbox converts boolean to checkbox symbol.
+// boolToCheckbox converts boolean to checkbox symbol. The trailing space is
+// needed because termui's style parser drops a "]" at the end of cell text,
+// which rendered "[✓]" as "[✓".
 func boolToCheckbox(b bool) string {
 	if b {
-		return checkboxChecked
+		return checkboxChecked + " "
 	}
-	return checkboxUnchecked
+	return checkboxUnchecked + " "
 }
 
 // sortModeRadio returns radio button symbol for sort mode.
@@ -2339,12 +2373,13 @@ func sortModeRadio(current, target SortMode) string {
 	return "○"
 }
 
-// filterValue formats filter value for display.
+// filterValue formats filter value for display. As in boolToCheckbox, the
+// trailing space keeps termui from dropping the closing bracket.
 func filterValue(s string) string {
 	if s == "" {
-		return "[none]"
+		return "[none] "
 	}
-	return fmt.Sprintf("[%s]", s)
+	return fmt.Sprintf("[%s] ", s)
 }
 
 // createSettingsModal creates the settings modal table widget.
@@ -2355,31 +2390,31 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 	table.Border = true
 	table.BorderStyle = ui.NewStyle(ui.ColorCyan)
 
-	// Calculate total and visible rows
+	// One terminal line per row, so the row count below matches the height.
+	table.RowSeparator = false
+
+	// The header row stays pinned; the rows below it scroll.
 	allRows := buildSettingsRows(state)
-	totalRows := len(allRows)
-	visibleRows := termHeight - 10
-	if visibleRows < 15 {
-		visibleRows = 15
-	}
-	if visibleRows > totalRows {
-		visibleRows = totalRows
-	}
+	dataRows := len(allRows) - 1
+	visibleRows := settingsVisibleRows(termHeight, dataRows)
+	updateModalScroll(state, allRows, visibleRows)
 
-	// Update scroll if needed
-	updateModalScroll(state, totalRows, visibleRows)
+	start := 1 + state.modalScrollOffset
+	table.Rows = append([][]string{allRows[0]}, allRows[start:start+visibleRows]...)
 
-	// Slice rows for scrolling
-	endRow := state.modalScrollOffset + visibleRows
-	if endRow > totalRows {
-		endRow = totalRows
-	}
-	table.Rows = allRows[state.modalScrollOffset:endRow]
-
-	// Title with scroll position and instructions
+	// Title with the selected setting's position when the list scrolls.
 	scrollInfo := ""
-	if totalRows > visibleRows {
-		scrollInfo = fmt.Sprintf(" (%d/%d)", state.modalSelectedRow+1, totalRows)
+	if dataRows > visibleRows {
+		position, count := 0, 0
+		for i, row := range allRows {
+			if isSelectableSettingsRow(row) {
+				count++
+				if i == state.modalSelectedRow {
+					position = count
+				}
+			}
+		}
+		scrollInfo = fmt.Sprintf(" (%d/%d)", position, count)
 	}
 	table.Title = fmt.Sprintf(" ⚙️  Settings%s - ↑↓ Navigate | Space Select | ←→ Adjust | s Save | Esc Cancel ",
 		scrollInfo)
@@ -2387,9 +2422,9 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 
 	// Center the modal
 	modalWidth := 75
-	modalHeight := visibleRows + 2 // +2 for borders
-	modalX := (termWidth - modalWidth) / 2
-	modalY := (termHeight - modalHeight) / 2
+	modalHeight := visibleRows + 3 // header row + 2 borders
+	modalX := max((termWidth-modalWidth)/2, 0)
+	modalY := max((termHeight-modalHeight)/2, 0)
 	table.SetRect(modalX, modalY, modalX+modalWidth, modalY+modalHeight)
 
 	// Column widths
@@ -2398,12 +2433,11 @@ func createSettingsModal(state *LiveState, termWidth, termHeight int) *widgets.T
 	// Style header row
 	table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
 
-	// Highlight selected row (adjust for scroll offset only, no +1 for header)
+	// Highlight the selected row. Table row 0 is the pinned header, so the
+	// selected row's table index is its allRows index minus the scroll offset.
 	selectedIdx := state.modalSelectedRow - state.modalScrollOffset
-	if selectedIdx >= 0 && selectedIdx < len(table.Rows) {
-		// Only highlight non-empty, non-category rows
-		row := allRows[state.modalSelectedRow]
-		if len(row) > 1 && row[1] != "" && row[0] == "" {
+	if selectedIdx > 0 && selectedIdx < len(table.Rows) {
+		if isSelectableSettingsRow(allRows[state.modalSelectedRow]) {
 			table.RowStyles[selectedIdx] = ui.NewStyle(ui.ColorBlack, ui.ColorCyan, ui.ModifierBold)
 		}
 	}
@@ -2441,20 +2475,12 @@ func handleModalEvent(e ui.Event, state *LiveState) {
 	_, termHeight := ui.TerminalDimensions()
 	allRows := buildSettingsRows(state)
 	totalRows := len(allRows)
-	visibleRows := termHeight - 10
-	if visibleRows < 15 {
-		visibleRows = 15
-	}
-	if visibleRows > totalRows {
-		visibleRows = totalRows
-	}
+	visibleRows := settingsVisibleRows(termHeight, totalRows-1)
 
 	// Find next/previous selectable row
 	findNextSelectableRow := func(current, direction int) int {
 		for i := current + direction; i >= 0 && i < totalRows; i += direction {
-			row := allRows[i]
-			// Selectable if: not empty, has content in column 1, not a category header
-			if len(row) > 1 && row[1] != "" && row[0] == "" {
+			if isSelectableSettingsRow(allRows[i]) {
 				return i
 			}
 		}
@@ -2475,11 +2501,11 @@ func handleModalEvent(e ui.Event, state *LiveState) {
 
 	case "<Up>":
 		state.modalSelectedRow = findNextSelectableRow(state.modalSelectedRow, -1)
-		updateModalScroll(state, totalRows, visibleRows)
+		updateModalScroll(state, allRows, visibleRows)
 
 	case "<Down>":
 		state.modalSelectedRow = findNextSelectableRow(state.modalSelectedRow, 1)
-		updateModalScroll(state, totalRows, visibleRows)
+		updateModalScroll(state, allRows, visibleRows)
 
 	case "<PageUp>":
 		newRow := state.modalSelectedRow - visibleRows
@@ -2487,7 +2513,7 @@ func handleModalEvent(e ui.Event, state *LiveState) {
 			newRow = 0
 		}
 		state.modalSelectedRow = findNextSelectableRow(newRow, 1)
-		updateModalScroll(state, totalRows, visibleRows)
+		updateModalScroll(state, allRows, visibleRows)
 
 	case "<PageDown>":
 		newRow := state.modalSelectedRow + visibleRows
@@ -2495,7 +2521,7 @@ func handleModalEvent(e ui.Event, state *LiveState) {
 			newRow = totalRows - 1
 		}
 		state.modalSelectedRow = findNextSelectableRow(newRow, -1)
-		updateModalScroll(state, totalRows, visibleRows)
+		updateModalScroll(state, allRows, visibleRows)
 
 	case "<Space>", "<Enter>":
 		// Toggle setting at selected row

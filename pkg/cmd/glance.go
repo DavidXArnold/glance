@@ -133,14 +133,14 @@ func writeConfigSafe() {
 	}
 
 	// Decide whether to create or update based on file existence.
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
 		// First-time write: create the file.
 		if err := viper.WriteConfigAs(configPath); err != nil {
 			log.WithError(err).Debug("Failed to write config")
 		}
 		return
-	} else if err != nil {
-		log.WithError(err).Debug("Failed to stat config file path")
+	} else if statErr != nil {
+		log.WithError(statErr).Debug("Failed to stat config file path")
 		return
 	}
 
@@ -175,8 +175,8 @@ func configureLogging() {
 	if level >= log.InfoLevel {
 		// Determine log directory - prefer ~/.glance/, fall back to /tmp
 		logDir := ""
-		home, err := homedir.Dir()
-		if err == nil {
+		home, homeErr := homedir.Dir()
+		if homeErr == nil {
 			glanceDir := filepath.Join(home, ".glance")
 			if err := os.MkdirAll(glanceDir, 0750); err == nil {
 				logDir = glanceDir
@@ -232,8 +232,8 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 		"Output format. One of: txt|pretty|json|dash|pie|chart")
 	cmd.PersistentFlags().BoolVarP(
 		cloudInfo, "show-cloud-provider", "c", false,
-		"-c, --show-cloud-provider  Display cloud provider metadata (AWS/GCP instance types, regions).\n"+
-			"Enabled by default if cloud detected.")
+		"Show cloud provider columns (AWS/GCP instance type, region, capacity type). "+
+			"Off by default; enabling it calls the cloud provider API")
 
 	// Static node-column visibility flags. These mirror the live view toggles
 	// but are exposed as CLI options for the top-level glance command. Flags
@@ -263,6 +263,11 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	var exactValues bool
 	cmd.PersistentFlags().BoolVar(&showRaw, "raw", false, "Show raw Kubernetes resource values (e.g., 1500m, 2048Mi)")
 	cmd.PersistentFlags().BoolVar(&exactValues, "exact", false, "Alias for --raw")
+
+	// Static node view: fail instead of showing allocation only when the
+	// metrics API is unavailable.
+	cmd.Flags().Bool("require-metrics", false,
+		"Fail if metrics-server (metrics.k8s.io) is unavailable instead of showing allocation without usage")
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "",
 		"Path to the glance config file (default ~/.glance/config)")
@@ -405,23 +410,35 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		return err
 	}
 
-	// Require metrics-server; fail with a clear message if metrics API is missing.
-	snapshotOpts := core.NodeSnapshotOptions{RequireMetrics: true}
-
+	// Without metrics-server, requests, limits and capacity are still useful:
+	// show them with usage as n/a unless --require-metrics is set.
+	metricsAvailable := true
 	nodeMetricsByName, err := buildNodeMetricsByName(ctx, metricsClientset)
 	if err != nil {
-		if isMetricsServerNotAvailable(err) {
-			msg := "metrics-server (metrics.k8s.io) is required for glance to operate. Install the Kubernetes metrics-server add-on or your cloud provider's metrics extension."
-			log.Warnf("%s: %v", msg, err)
-			return fmt.Errorf("%s", msg)
+		if !isMetricsServerNotAvailable(err) {
+			return err
 		}
-		return err
+		log.Debugf("metrics API unavailable: %v", err)
+		if viper.GetBool("require-metrics") {
+			return fmt.Errorf("metrics-server (metrics.k8s.io) is not available; install the Kubernetes " +
+				"metrics-server add-on or your cloud provider's metrics extension, or omit --require-metrics")
+		}
+		fmt.Fprintln(os.Stderr, "Warning: metrics-server (metrics.k8s.io) is not available; "+
+			"showing allocation only, usage is n/a. Install metrics-server to see usage.")
+		metricsAvailable = false
+		nodeMetricsByName = nil
 	}
 
 	// Compute core snapshot (NodeMap + Totals) using shared aggregation logic.
-	nm, totals, err := core.ComputeNodeSnapshot(nodes.Items, podsByNode, nodeMetricsByName, snapshotOpts)
+	nm, totals, err := core.ComputeNodeSnapshot(nodes.Items, podsByNode, nodeMetricsByName,
+		core.NodeSnapshotOptions{RequireMetrics: false})
 	if err != nil {
 		return err
+	}
+	if !metricsAvailable {
+		// Report unknown usage as null rather than zero.
+		totals.TotalUsageCPU = nil
+		totals.TotalUsageMemory = nil
 	}
 
 	// Set cluster info for display in summary
@@ -652,7 +669,7 @@ func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeS
 			return
 		}
 
-		// Also cache under the full providerID to align with live path behaviour.
+		// Also cache under the full providerID to align with live path behavior.
 		cache.Set(ns.ProviderID, md)
 
 		// Map provider-agnostic metadata onto NodeStats.
@@ -704,8 +721,9 @@ func isMetricsServerNotAvailable(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Treat standard NotFound as "metrics API missing".
-	if k8serrors.IsNotFound(err) {
+	// NotFound: metrics-server is not installed. ServiceUnavailable: the
+	// APIService is registered but metrics-server is not serving.
+	if k8serrors.IsNotFound(err) || k8serrors.IsServiceUnavailable(err) {
 		return true
 	}
 	// Fallback to string matching for clusters that return generic errors.

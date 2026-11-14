@@ -14,8 +14,10 @@ limitations under the License.
 package cmd
 
 import (
+	"strings"
 	"testing"
 
+	ui "github.com/gizak/termui/v3"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -181,6 +183,14 @@ func TestMultiplyQuantity(t *testing.T) {
 					tt.input, tt.multiplier, result.Value(), tt.expected)
 			}
 		})
+	}
+
+	// Sub-core CPU must not round up before multiplying.
+	if got := multiplyQuantity(resource.NewMilliQuantity(100, resource.DecimalSI), 3).MilliValue(); got != 300 {
+		t.Errorf("multiplyQuantity(100m, 3) = %dm, want 300m", got)
+	}
+	if got := multiplyQuantity(resource.NewMilliQuantity(250, resource.DecimalSI), 1).MilliValue(); got != 250 {
+		t.Errorf("multiplyQuantity(250m, 1) = %dm, want 250m", got)
 	}
 }
 
@@ -419,4 +429,82 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestSettingsModalKeepsSelectionVisible walks the cursor through every
+// setting at several terminal heights and checks that the selected row is
+// always rendered and highlighted, the header stays pinned, and the modal fits
+// on screen with one line per row (issue #50).
+func TestSettingsModalKeepsSelectionVisible(t *testing.T) {
+	for _, termHeight := range []int{8, 12, 20, 60} {
+		state := &LiveState{nodeLimit: 20, podLimit: 100}
+		initPendingState(state)
+		allRows := buildSettingsRows(state)
+
+		var selectable []int
+		for i, row := range allRows {
+			if isSelectableSettingsRow(row) {
+				selectable = append(selectable, i)
+			}
+		}
+		if len(selectable) == 0 {
+			t.Fatal("no selectable settings rows")
+		}
+
+		// Walk down, then back up.
+		path := append([]int{}, selectable...)
+		for i := len(selectable) - 2; i >= 0; i-- {
+			path = append(path, selectable[i])
+		}
+
+		for _, row := range path {
+			state.modalSelectedRow = row
+			table := createSettingsModal(state, 120, termHeight)
+
+			if table.Rows[0][0] != allRows[0][0] {
+				t.Fatalf("height %d: header not pinned, first row %v", termHeight, table.Rows[0])
+			}
+			if table.RowSeparator {
+				t.Fatalf("height %d: row separators double the row height", termHeight)
+			}
+			height := table.Max.Y - table.Min.Y
+			if height > termHeight {
+				t.Errorf("height %d: modal is %d lines tall", termHeight, height)
+			}
+			if got, want := len(table.Rows)+2, height; got != want {
+				t.Errorf("height %d: %d rows + borders do not fill a %d-line modal", termHeight, len(table.Rows), want)
+			}
+
+			idx := row - state.modalScrollOffset
+			if idx <= 0 || idx >= len(table.Rows) {
+				t.Fatalf("height %d: selected row %d (%s) is off screen (offset %d, %d rows shown)",
+					termHeight, row, allRows[row][1], state.modalScrollOffset, len(table.Rows))
+			}
+			if table.Rows[idx][1] != allRows[row][1] {
+				t.Errorf("height %d: row %d shows %q, want %q", termHeight, idx, table.Rows[idx][1], allRows[row][1])
+			}
+			if _, ok := table.RowStyles[idx]; !ok {
+				t.Errorf("height %d: selected row %q is not highlighted", termHeight, allRows[row][1])
+			}
+		}
+
+		// Back at the first setting, its category title is visible again.
+		if state.modalScrollOffset != 0 {
+			t.Errorf("height %d: scrolling back to the first setting left offset %d", termHeight, state.modalScrollOffset)
+		}
+	}
+}
+
+// TestCheckboxSurvivesStyleParsing guards against termui dropping the closing
+// bracket of a checkbox at the end of a settings cell.
+func TestCheckboxSurvivesStyleParsing(t *testing.T) {
+	for _, value := range []string{boolToCheckbox(true), boolToCheckbox(false), filterValue(""), filterValue("spot")} {
+		var got strings.Builder
+		for _, c := range ui.ParseStyles(value, ui.NewStyle(ui.ColorWhite)) {
+			got.WriteRune(c.Rune)
+		}
+		if !strings.Contains(got.String(), "]") {
+			t.Errorf("%q renders as %q, missing the closing bracket", value, got.String())
+		}
+	}
 }

@@ -126,7 +126,7 @@ func CollectPodStats(
 			}
 		}
 
-		status := string(pod.Status.Phase)
+		status := podStatusReason(pod)
 
 		row := PodSummaryRow{
 			Namespace: pod.Namespace,

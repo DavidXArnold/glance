@@ -72,7 +72,7 @@ func formatMemoryQuantity(q *resource.Quantity) string {
 // formatResourceRatioFromStrings formats resource strings as ratio (used / total).
 // Converts string quantities to resource.Quantity then formats as ratio.
 // nolint:unused // Reserved for future static view ratio formatting
-func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory bool, showRaw bool) string {
+func formatResourceRatioFromStrings(usedStr, totalStr string, isMemory, showRaw bool) string {
 	used, err := resource.ParseQuantity(usedStr)
 	if err != nil {
 		return fmt.Sprintf("%s / %s", usedStr, totalStr)
@@ -617,6 +617,9 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 		cpuUsageBar, cpuUsagePct,
 		formatCPUQuantity(c.TotalUsageCPU),
 		formatCPUQuantity(c.TotalAllocatableCPU))
+	if c.TotalUsageCPU == nil {
+		cpuLine = "║  CPU Usage:      " + metricsUnavailableNote
+	}
 	fmt.Println(padRightDynamic(cpuLine, boxWidth) + "║")
 
 	// CPU Allocated
@@ -635,6 +638,9 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 		memUsageBar, memUsagePct,
 		formatMemoryQuantity(c.TotalUsageMemory),
 		formatMemoryQuantity(c.TotalAllocatableMemory))
+	if c.TotalUsageMemory == nil {
+		memLine = "║  Mem Usage:      " + metricsUnavailableNote
+	}
 	fmt.Println(padRightDynamic(memLine, boxWidth) + "║")
 
 	// Memory Allocated
@@ -737,24 +743,31 @@ func buildSparkline(values ...float64) string {
 
 // buildCPUUtilizationCell creates a detailed CPU utilization cell.
 func buildCPUUtilizationCell(v *NodeStats) string {
-	if v.AllocatableCPU == nil || v.AllocatableCPU.IsZero() {
+	return buildUtilizationCell(v.UsageCPU, v.AllocatableCPU, &v.AllocatedCPUrequests, &v.AllocatedCPULimits,
+		formatCPUQuantity, "Limit")
+}
+
+// buildUtilizationCell renders a node's usage bar and sparkline over its
+// requests and limits. With unknown usage (no metrics) it shows the request
+// percentage and usage as n/a instead of an empty bar.
+func buildUtilizationCell(usage, allocatable, requests, limits *resource.Quantity,
+	format func(*resource.Quantity) string, limitLabel string) string {
+	if allocatable == nil || allocatable.IsZero() {
 		return "N/A"
 	}
 
-	usagePct := calculatePercentageFromQuantities(v.UsageCPU, v.AllocatableCPU)
-	reqPct := calculatePercentageFromQuantities(&v.AllocatedCPUrequests, v.AllocatableCPU)
-	limPct := calculatePercentageFromQuantities(&v.AllocatedCPULimits, v.AllocatableCPU)
+	reqPct := calculatePercentageFromQuantities(requests, allocatable)
+	detail := fmt.Sprintf("Req: %s  %s: %s", format(requests), limitLabel, format(limits))
+	if usage == nil {
+		return fmt.Sprintf("Usage: %s  Req: %5.1f%%\n%s", usageNA, reqPct, detail)
+	}
 
-	// Mini progress bar (15 chars)
+	usagePct := calculatePercentageFromQuantities(usage, allocatable)
+	limPct := calculatePercentageFromQuantities(limits, allocatable)
 	bar := buildMiniProgressBar(usagePct, 12)
-
 	// Sparkline showing req, usage, limit trend
 	spark := buildSparkline(reqPct, usagePct, limPct)
-
-	return fmt.Sprintf("%s %5.1f%% %s\nReq: %s  Limit: %s",
-		bar, usagePct, spark,
-		formatCPUQuantity(&v.AllocatedCPUrequests),
-		formatCPUQuantity(&v.AllocatedCPULimits))
+	return fmt.Sprintf("%s %5.1f%% %s\n%s", bar, usagePct, spark, detail)
 }
 
 // buildGPUUtilizationCell creates a GPU utilization cell showing requested / allocatable.
@@ -780,24 +793,8 @@ func buildGPUUtilizationCell(v *NodeStats) string {
 
 // buildMemUtilizationCell creates a detailed memory utilization cell.
 func buildMemUtilizationCell(v *NodeStats) string {
-	if v.AllocatableMemory == nil || v.AllocatableMemory.IsZero() {
-		return "N/A"
-	}
-
-	usagePct := calculatePercentageFromQuantities(v.UsageMemory, v.AllocatableMemory)
-	reqPct := calculatePercentageFromQuantities(&v.AllocatedMemoryRequests, v.AllocatableMemory)
-	limPct := calculatePercentageFromQuantities(&v.AllocatedMemoryLimits, v.AllocatableMemory)
-
-	// Mini progress bar (15 chars)
-	bar := buildMiniProgressBar(usagePct, 12)
-
-	// Sparkline showing req, usage, limit trend
-	spark := buildSparkline(reqPct, usagePct, limPct)
-
-	return fmt.Sprintf("%s %5.1f%% %s\nReq: %s  Lim: %s",
-		bar, usagePct, spark,
-		formatMemoryQuantity(&v.AllocatedMemoryRequests),
-		formatMemoryQuantity(&v.AllocatedMemoryLimits))
+	return buildUtilizationCell(v.UsageMemory, v.AllocatableMemory, &v.AllocatedMemoryRequests,
+		&v.AllocatedMemoryLimits, formatMemoryQuantity, "Lim")
 }
 
 // buildMiniProgressBar creates a compact colored progress bar
@@ -833,6 +830,10 @@ func buildTotalCPUCell(c *core.Totals) string {
 	usagePct := calculatePercentage(c.TotalUsageCPU, c.TotalAllocatableCPU)
 	reqPct := calculatePercentage(c.TotalAllocatedCPUrequests, c.TotalAllocatableCPU)
 
+	if c.TotalUsageCPU == nil {
+		return fmt.Sprintf("Usage: %s  Req: %5.1f%%\n%s / %s",
+			usageNA, reqPct, usageNA, formatCPUQuantity(c.TotalAllocatableCPU))
+	}
 	return fmt.Sprintf("Usage: %5.1f%%  Req: %5.1f%%\n%s / %s",
 		usagePct, reqPct,
 		formatCPUQuantity(c.TotalUsageCPU),
@@ -909,10 +910,38 @@ func buildTotalMemCell(c *core.Totals) string {
 	usagePct := calculatePercentage(c.TotalUsageMemory, c.TotalAllocatableMemory)
 	reqPct := calculatePercentage(c.TotalAllocatedMemoryRequests, c.TotalAllocatableMemory)
 
+	if c.TotalUsageMemory == nil {
+		return fmt.Sprintf("Usage: %s  Req: %5.1f%%\n%s / %s",
+			usageNA, reqPct, usageNA, formatMemoryQuantity(c.TotalAllocatableMemory))
+	}
 	return fmt.Sprintf("Usage: %5.1f%%  Req: %5.1f%%\n%s / %s",
 		usagePct, reqPct,
 		formatMemoryQuantity(c.TotalUsageMemory),
 		formatMemoryQuantity(c.TotalAllocatableMemory))
+}
+
+// usageNA is shown in place of usage when metrics are unavailable.
+const usageNA = "n/a"
+
+// metricsUnavailableNote replaces the usage bars in the summary box when the
+// metrics API is unavailable.
+const metricsUnavailableNote = "n/a (metrics-server not available)"
+
+// formatUsage formats a usage quantity, or returns usageNA when usage is
+// unknown because no metrics were reported.
+func formatUsage(q *resource.Quantity, format func(*resource.Quantity) string) string {
+	if q == nil {
+		return usageNA
+	}
+	return format(q)
+}
+
+// quantityValue returns q's integer value, or 0 when q is nil.
+func quantityValue(q *resource.Quantity) int64 {
+	if q == nil {
+		return 0
+	}
+	return q.Value()
 }
 
 // calculatePercentage calculates percentage from two quantities
@@ -1036,11 +1065,11 @@ func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGro
 	row = append(row,
 		formatCPUQuantity(&v.AllocatedCPUrequests),
 		formatCPUQuantity(&v.AllocatedCPULimits),
-		formatCPUQuantity(v.UsageCPU),
+		formatUsage(v.UsageCPU, formatCPUQuantity),
 		cpuPct,
 		formatMemoryQuantity(&v.AllocatedMemoryRequests),
 		formatMemoryQuantity(&v.AllocatedMemoryLimits),
-		formatMemoryQuantity(v.UsageMemory),
+		formatUsage(v.UsageMemory, formatMemoryQuantity),
 		memPct,
 	)
 
@@ -1095,11 +1124,11 @@ func buildTableFooter(c *core.Totals, numNodes int, showVersion, showAge, showGr
 	footerRow = append(footerRow,
 		formatCPUQuantity(c.TotalAllocatedCPUrequests),
 		formatCPUQuantity(c.TotalAllocatedCPULimits),
-		formatCPUQuantity(c.TotalUsageCPU),
+		formatUsage(c.TotalUsageCPU, formatCPUQuantity),
 		totalCPUPct,
 		formatMemoryQuantity(c.TotalAllocatedMemoryRequests),
 		formatMemoryQuantity(c.TotalAllocatedMemoryLimits),
-		formatMemoryQuantity(c.TotalUsageMemory),
+		formatUsage(c.TotalUsageMemory, formatMemoryQuantity),
 		totalMemPct,
 	)
 	if showGPU {
@@ -1342,7 +1371,7 @@ func dash(nm *core.NodeMap) error {
 		mem.Data = []float64{
 			float64(v.AllocatedMemoryRequests.Value()),
 			float64(v.AllocatedMemoryLimits.Value()),
-			float64(v.UsageMemory.Value())}
+			float64(quantityValue(v.UsageMemory))}
 	}
 	cpu.Labels = []string{"Allocated", "Limits", "Usage"}
 	cpu.SetRect(0, 0, 50, 5)
@@ -1388,7 +1417,7 @@ func pie(nm *core.NodeMap) error {
 		mem.Data = []float64{
 			float64(v.AllocatedMemoryRequests.Value()),
 			float64(v.AllocatedMemoryLimits.Value()),
-			float64(v.UsageMemory.Value())}
+			float64(quantityValue(v.UsageMemory))}
 	}
 
 	cpu.SetRect(0, 0, 50, 5)

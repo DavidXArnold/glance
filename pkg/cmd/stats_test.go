@@ -210,11 +210,9 @@ func TestCollectDeploymentStats_GPUResources(t *testing.T) {
 	if row.GPULimit.Value() != 3 {
 		t.Errorf("expected GPU limits 3 (1*3 replicas), got %d", row.GPULimit.Value())
 	}
-	// Verify CPU is also multiplied by replicas.
-	// Note: multiplyQuantity uses Value() which rounds 500m (0.5) up to 1,
-	// so 1*3 = 3 (3000m). This is a known precision trade-off.
-	if row.CPUReq.MilliValue() != 3000 {
-		t.Errorf("expected CPU requests 3000m (rounded), got %dm", row.CPUReq.MilliValue())
+	// CPU is also multiplied by replicas, without rounding: 500m * 3 = 1500m.
+	if row.CPUReq.MilliValue() != 1500 {
+		t.Errorf("expected CPU requests 1500m (500m*3 replicas), got %dm", row.CPUReq.MilliValue())
 	}
 }
 

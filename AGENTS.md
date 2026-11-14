@@ -131,10 +131,11 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 - Creates multi-platform archives
 - Uploads to GitLab Package Registry
 - Creates GitLab Release
-- Updates `plugins/krew/glance.yaml` with new checksums
+- Creates the GitHub release and attaches the archives and `checksums.txt` (`release-github`)
+- Updates `plugins/krew/glance.yaml` with new checksums and GitHub release asset URIs, so GitHub's per-asset download counts track krew installs/upgrades
 - Syncs tags and the `main` branch to the GitHub mirror (`github.com/DavidXArnold/glance`)
 - Triggers the krew-release-bot GitHub Action when the release tag is mirrored to GitHub
-  - The action checks out `main` and polls (up to 45 minutes) until `plugins/krew/glance.yaml` matches the tag and the GitHub release for the tag exists, then runs `rajatjindal/krew-release-bot`
+  - The action checks out `main` and polls (up to 45 minutes) until `plugins/krew/glance.yaml` matches the tag and the GitHub release for the tag exists with every archive the manifest names attached, then runs `rajatjindal/krew-release-bot`
   - The bot requires `GITHUB_REF` to be a tag ref; to re-run for an existing release, use workflow_dispatch with the tag as the ref
   - The bot opens/updates a PR in `kubernetes-sigs/krew-index` with the new manifest for the tagged release
 
@@ -415,7 +416,7 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
   - Node view: "CPU ALLOC/CAP", "MEM ALLOC/CAP" (allocated/capacity ratios)
   - Deployment view: simplified to requests/limits ratios only
 - Renamed `--cloud-info` flag to `--show-cloud-provider`:
-  - Default changed from `false` to `true` (enabled by default)
+  - Default changed from `false` to `true` at the time; it is now `false` again (no cloud API calls unless enabled, #37)
   - More descriptive name for the feature
   - Backwards compatibility alias maintained in viper bindings
 - Added namespace configuration:
@@ -436,7 +437,7 @@ A: You need a Kubernetes cluster. Use `kind`, `minikube`, or connect to a real c
   - All fetch functions updated to use ratio formatting
   - Headers reduced from 8-9 columns to 6-7 by combining related metrics
 - **`pkg/cmd/glance.go`** - flag changes:
-  - Renamed `cloud-info` to `show-cloud-provider` with default true
+  - Renamed `cloud-info` to `show-cloud-provider` (default later set to false: no cloud API calls unless enabled)
   - Added backwards compatibility binding for `cloud-info`
 - **`LiveState` struct** - added `showRawResources bool` field
 
@@ -505,7 +506,7 @@ default    2500m / 4000m        1800m / 4000m     4096Mi / 8192Mi         3200Mi
 - **Default view changed**: Was Namespaces, now Pods
 - **Column format changed**: Separate columns combined into ratio format
 - **Flag renamed**: `--cloud-info` → `--show-cloud-provider` (backwards compatible)
-- **Default behavior changed**: Cloud info now enabled by default
+- **Default behavior changed**: Cloud info enabled by default (since reverted: the default is `false`, #37)
 
 ### Migration Guide for Users
 - Users expecting Namespaces view on startup: Press `n` to switch

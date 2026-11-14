@@ -29,6 +29,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 
 - [Installation](#installation)
   - [Krew (Recommended)](#krew-kubectl-plugin-manager)
+  - [Manual Download](#manual-download)
   - [From Source](#from-source)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
@@ -56,6 +57,13 @@ The easiest way to install glance is through [krew](https://krew.sigs.k8s.io/):
 kubectl krew update
 kubectl krew install glance
 ```
+
+### Manual Download
+
+Each [GitHub release](https://github.com/DavidXArnold/glance/releases) (v0.4.2 and later)
+has `kubectl-glance-VERSION-OS-ARCH.tar.gz` archives and a `checksums.txt`; the
+[GitLab releases](https://gitlab.com/davidxarnold/glance/-/releases) link the same files.
+Extract `kubectl-glance` onto your `PATH`, and kubectl picks it up as `kubectl glance`.
 
 ### From Source
 
@@ -111,6 +119,10 @@ kubectl glance deployments
 
 # Static deployments view for a specific namespace
 kubectl glance deployments -n production
+
+# Pods or deployments across all namespaces (like kubectl -A)
+kubectl glance pods -A
+kubectl glance deployments -A
 
 # GPU allocation and waste: free capacity, fragmentation, pending GPU pods
 kubectl glance gpus
@@ -670,6 +682,7 @@ kubectl glance -o json \
 | `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) |
 | `--show-gpu` | | `false` | Show GPU columns (auto-enabled when GPU nodes are detected) |
 | `--gpu-resources` | | | Extra extended resource names or glob patterns to count as GPUs/accelerators (e.g. `example.com/npu,vendor.io/*`) |
+| `--require-metrics` | | `false` | Node view only: fail when metrics-server is unavailable instead of showing allocation with usage as `n/a` |
 | `--config` | | `~/.glance/config` | Path to the glance config file |
 
 Standard kubectl flags are also accepted: `--context`, `--kubeconfig`,
@@ -677,8 +690,13 @@ Standard kubectl flags are also accepted: `--context`, `--kubeconfig`,
 
 **Static subcommands** (`kubectl glance pods`, `kubectl glance deployments`,
 `kubectl glance gpus`) accept the same flags. `pods` and `deployments` are scoped
-to `-n/--namespace` (default: your kubeconfig context's namespace); `gpus` covers
-all namespaces and applies the selectors to nodes.
+to `-n/--namespace` (default: your kubeconfig context's namespace), or to all
+namespaces with `-A/--all-namespaces`; `gpus` covers all namespaces and applies
+the selectors to nodes.
+
+The pods STATUS column shows the effective state the way `kubectl get pods` does:
+`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`, `Terminating`, `Init:1/2`,
+`Completed`, and so on, rather than just the pod phase.
 
 ### Live View Flags
 
@@ -841,8 +859,10 @@ kubectl glance --raw -o json | jq '{
 - **Kubernetes**: built with client-go v0.37 (Kubernetes 1.37 libraries). Glance only reads core
   APIs (nodes, pods, deployments, metrics), so older clusters generally work; development and
   testing currently use k3s 1.24.
-- **Metrics Server**: required by the node view (`kubectl glance`) and for usage columns in live mode.
-  `kubectl glance gpus`, `pods`, and `deployments` work without it (usage shows as 0).
+- **Metrics Server**: provides the usage columns. Without it, the node view (`kubectl glance`)
+  prints a warning and shows requests, limits and capacity with usage as `n/a`
+  (pass `--require-metrics` to fail instead). `kubectl glance gpus`, `pods`, and `deployments`
+  also work without it (pod usage shows as 0), as does live mode.
   - Install: `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`
   - Or see the Kubernetes [metrics-server project] or your cloud provider's documentation for managed metrics add-ons
 
@@ -1022,10 +1042,24 @@ The CI pipeline then:
 2. Builds binaries for all platforms (darwin/linux amd64/arm64, windows amd64)
 3. Creates `.tar.gz` archives with SHA256 checksums
 4. Creates a GitLab Release with downloadable artifacts
-5. Updates `plugins/krew/glance.yaml` on `main` with the new version and checksums
-6. Mirrors the tag and `main` to GitHub, where the krew-release-bot workflow
-   waits for the manifest and the GitHub release, then opens a PR in
+5. Creates the GitHub release and attaches the archives and `checksums.txt`
+6. Updates `plugins/krew/glance.yaml` on `main` with the new version, checksums, and
+   GitHub release asset URLs
+7. Mirrors the tag and `main` to GitHub, where the krew-release-bot workflow
+   waits for the manifest, the GitHub release and its assets, then opens a PR in
    [kubernetes-sigs/krew-index](https://github.com/kubernetes-sigs/krew-index)
+
+#### Download statistics
+
+Krew has no telemetry; `kubectl krew install` and `upgrade` just download the archive
+named in the manifest. Since v0.4.2 those are GitHub release assets, so GitHub's
+per-asset download counts approximate krew installs and upgrades (plus manual
+downloads and a few CI checks per release):
+
+```shell
+gh api repos/DavidXArnold/glance/releases \
+  --jq '.[] | [.tag_name, ([.assets[] | select(.name | endswith(".tar.gz")) | .download_count] | add // 0)] | @tsv'
+```
 
 If the krew bot times out, re-run the `krew-release-bot` workflow on GitHub
 with the release tag selected as the ref.
