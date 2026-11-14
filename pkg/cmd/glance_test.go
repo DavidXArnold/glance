@@ -186,6 +186,25 @@ func TestNewGlanceCmdFlags(t *testing.T) {
 	if cmd.PersistentFlags().Lookup("show-cloud-provider") == nil {
 		t.Errorf("show-cloud-provider flag not found")
 	}
+
+	// -l matches kubectl's shorthand for --selector, and is used throughout
+	// the README.
+	if f := cmd.PersistentFlags().ShorthandLookup("l"); f == nil || f.Name != "selector" {
+		t.Errorf("-l should be the shorthand for --selector, got %v", f)
+	}
+	if cmd.PersistentFlags().Lookup("config") == nil {
+		t.Errorf("config flag not found")
+	}
+	// Subcommands inherit both.
+	for _, sub := range []string{"pods", "deployments", "gpus", "live"} {
+		c, _, err := cmd.Find([]string{sub})
+		if err != nil {
+			t.Fatalf("subcommand %s not found: %v", sub, err)
+		}
+		if c.InheritedFlags().ShorthandLookup("l") == nil || c.InheritedFlags().Lookup("config") == nil {
+			t.Errorf("%s does not inherit -l/--config", sub)
+		}
+	}
 }
 
 // TestGlanceK8sErrorPropagation documents the intent that GlanceK8s should

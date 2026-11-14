@@ -116,10 +116,15 @@ make build-all      # Build for all platforms (darwin, linux, windows)
    - Follow [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format
    - Create new empty `[Unreleased]` section at the top
    - Be descriptive but concise - focus on user-facing changes
-2. Update `version/version.go` with new version (e.g., `"0.1.3"`)
-3. Commit both files: `git commit -m "chore: bump version to 0.1.3"`
-4. Push to main: `git push origin main`
-5. Create and push tag: `git tag v0.1.3 && git push origin v0.1.3`
+   - Add a comparison link for the new version at the bottom of the file
+   - After any rebase or merge, check new entries are still under `[Unreleased]`, not an already-released version
+2. **Update `README.md`** for every user-visible change in the release: commands, CLI flags reference,
+   keyboard shortcuts, config example, requirements, and example output. A release is not ready until
+   both CHANGELOG.md and README.md describe what ships.
+3. Update `version/version.go` with new version (e.g., `"0.1.3"`)
+4. Commit: `git commit -m "chore: bump version to 0.1.3"`
+5. Push to main: `git push origin main`
+6. Create and push tag: `git tag v0.1.3 && git push origin v0.1.3`
 
 **CI automatically:**
 - Runs lint, test, build
@@ -157,6 +162,7 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 
 When releasing:
 - `CHANGELOG.md` - **Manual**: MUST update with every release - move Unreleased items to versioned section
+- `README.md` - **Manual**: MUST reflect every user-visible change in the release
 - `version/version.go` - **Manual**: Update before tagging
 - `plugins/krew/glance.yaml` - **Auto**: Updated by CI
 
@@ -179,7 +185,7 @@ When releasing:
 2. Add a new subcommand file (for example, `pkg/cmd/pods.go` or `pkg/cmd/deployments.go`) that:
    - Resolves REST config via `gc.configFlags.ToRESTConfig()`.
    - Creates Kubernetes and (optionally) metrics clients.
-   - Uses `getLabelSelector()` and kubeconfig namespace to scope the query.
+   - Uses `getSelectors()` (label and field selectors) and the kubeconfig namespace to scope the query.
    - Calls the appropriate `Collect*Stats` helper.
    - Sorts results deterministically (namespace, then name) and delegates to a renderer in `render.go`.
 3. Add static renderers to `pkg/cmd/render.go` that:

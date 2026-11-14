@@ -181,6 +181,7 @@ View modes:
   - Namespaces: Shows resource requests, limits, and usage per namespace (navigate with ↑↓, Enter to view)
   - Pods: Shows resource requests, limits, and usage per pod (namespace-scoped)
   - Deployments: Shows deployment resource requests and replica status
+  - GPUs ([G]): Shows GPU pools, GPU nodes, pending GPU pods, and wasted-GPU findings
 
 Scaling options:
   - Use --node-limit to limit displayed nodes (default: 20)
@@ -190,7 +191,7 @@ Scaling options:
 Namespace navigation:
   - In Namespaces view: Press ↑↓ to select, Enter to view pods in that namespace
   - In Pods/Deployments views: Press ←→ to cycle through namespaces
-  - Use -n/--namespace flag to set initial namespace (default: all namespaces)
+  - Use -n/--namespace to set the initial namespace (default: the kubeconfig context's namespace)
 
 Controls will be displayed at the bottom of the screen.`,
 		SilenceErrors: true,
@@ -227,39 +228,9 @@ Controls will be displayed at the bottom of the screen.`,
 				log.Debugf("Failed to determine namespace: %v", err)
 				namespace = ""
 			}
-			// If namespace is "default" or empty, treat as all namespaces?
-			// The original code used "" for all.
-			// kubectl usually defaults to "default" if not specified.
-			// But glance live wants to show ALL by default?
-			// The help text says: "default: all namespaces".
-			// But kubectl config Namespace() returns "default" if context implies it.
-			// If user explicitly asks for -n default, we get default.
-			// If user doesn't specify, we get default from context.
-			// If we want "all", we need a way to say "all".
-			// kubectl uses --all-namespaces / -A.
-			// glance live previously defaulted to "" (all).
-			// If I use configFlags, I might get "default".
-			// If I want to preserve "default = all", I need to ignore context namespace?
-			// BUT the issue is "Support kubectl common --context flag".
-			// If I use a context that is set to namespace "prod", I expect glance to show "prod".
-			// So respecting context namespace is CORRECT.
-			// If user wants all, they can maybe use -A?
-			// configFlags has AddFlags... does it include -A?
-			// genericclioptions.NewConfigFlags(true) does NOT include -A.
-			// So if user runs `glance live`, they get context namespace.
-			// If context is default, they get default.
-			// PREVIOUS behavior: default to ALL.
-			// This is a behavior change.
-			// If I want to preserve "default to all", I should check if flag was explicitly set?
-			// But configFlags abstracts that.
-			// Let's assume respecting context is desired.
-			// However, if Namespace() returns "default" and user didn't specify it, maybe we want all?
-			// But how to distinguish?
-			// Validating the old behavior:
-			// cmd.Flags().StringVarP(&namespace, "namespace", "N", "", ...)
-			// Default was "".
-			// If I change to use configFlags, default will be context namespace (often "default").
-			// This seems acceptable for a tool respecting kubectl flags.
+			// Respect the kubeconfig context's namespace (or -n), like kubectl.
+			// There is no -A flag yet (#35); press ←→ in live mode to cycle
+			// namespaces, or "n" for the namespaces view.
 			// I'll stick with respecting the resolved namespace.
 
 			return runLive(k8sClient, gc, time.Duration(refreshInterval)*time.Second,
@@ -339,8 +310,8 @@ func runLive(
 	if err == nil {
 		state.totalNodes = len(nodes.Items)
 		if state.totalNodes > largeClusterThreshold {
-			log.Warnf("Large cluster detected (%d nodes). Using --node-limit=%d for performance. "+
-				"Consider using --watch mode for real-time updates with lower API load.",
+			log.Warnf("Large cluster detected (%d nodes). Showing at most %d nodes (--node-limit); "+
+				"raise it with --node-limit or in the settings panel ([?]).",
 				state.totalNodes, nodeLimit)
 		}
 		// Check if any node has a cloud provider ID
