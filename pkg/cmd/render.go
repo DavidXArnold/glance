@@ -129,7 +129,7 @@ func renderPodsStatic(rows []PodSummaryRow) error {
 
 	headerRow := pt.Row{
 		headerNamespace,
-		"POD",
+		headerPod,
 		headerCPURequests,
 		headerCPUUsage,
 		headerMemoryRequests,

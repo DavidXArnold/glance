@@ -361,6 +361,7 @@ func NewGlanceCmd() *cobra.Command {
 	cmd.AddCommand(NewLiveCmd(gc))
 	cmd.AddCommand(NewPodsCmd(gc))
 	cmd.AddCommand(NewDeploymentsCmd(gc))
+	cmd.AddCommand(NewGPUsCmd(gc))
 
 	return cmd
 }
@@ -489,7 +490,7 @@ func buildNonTerminatedPodsByNode(ctx context.Context, clientset *kubernetes.Cli
 	podsByNode := make(map[string][]v1.Pod)
 
 	podList, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: "status.phase!=Succeeded,status.phase!=Failed",
+		FieldSelector: nonTerminatedPods,
 	})
 	if err != nil {
 		return nil, err

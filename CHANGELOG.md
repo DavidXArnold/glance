@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `kubectl glance gpus` command (aliases `gpu`, `accelerators`) for finding wasted GPUs: free devices and the largest free block per GPU model and type, per-node GPU and non-GPU pod counts, pending GPU pods and whether they fit, and findings for idle GPU nodes, fragmentation, insufficient capacity, and free GPUs on cordoned or NotReady nodes. Supports `-o txt|pretty|json` (#49).
+- Live mode **GPUs** view (`G` key) with the same pools, nodes, pending pods, and findings (#49).
 - GPU MODEL column in node views (static and live) when GPU columns are shown, read from `nvidia.com/gpu.product` (NVIDIA GPU Feature Discovery), `cloud.google.com/gke-accelerator` (GKE), or `karpenter.k8s.aws/instance-gpu-name` (Karpenter) node labels (#48).
 - The `-o pretty` cluster summary breaks GPU allocation down by model and accelerator type, including free devices (#48).
 - `--gpu-resources` flag and `gpu-resources` config key to count additional device-plugin resources (names or glob patterns) as accelerators (#47).

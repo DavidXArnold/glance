@@ -108,6 +108,9 @@ kubectl glance deployments
 
 # Static deployments view for a specific namespace
 kubectl glance deployments -n production
+
+# GPU allocation and waste: free capacity, fragmentation, pending GPU pods
+kubectl glance gpus
 ```
 
 These commands support the same selectors and output formats as the root
@@ -218,6 +221,37 @@ slices shows `1 / 1 gpu, 3 / 7 mig-1g.10gb` rather than a misleading `4 / 8`.
 Requests follow the scheduler's rules: init containers, sidecars, and pod
 overhead are included.
 
+#### Finding wasted GPUs
+
+`kubectl glance gpus` (aliases `gpu`, `accelerators`) shows where GPUs are
+allocated and where they are wasted. Press `G` in live mode for the same view.
+
+```shell
+kubectl glance gpus                  # pools, GPU nodes, pending GPU pods, findings
+kubectl glance gpus -l pool=gpu      # only nodes matching a label selector
+kubectl glance gpus -o json          # machine-readable report
+```
+
+It reports:
+
+- **GPU pools**: per GPU model and accelerator type, how many devices are
+  requested and free, and the **largest free block**: the most free devices
+  on any one schedulable node. For example, eight nodes with one free GPU each
+  have 8 free GPUs but cannot run a 4-GPU job.
+- **GPU nodes**: per node, requested and allocatable devices, free devices,
+  and how many GPU and non-GPU pods it runs. DaemonSet pods (device plugins,
+  exporters) are not counted.
+- **Pending GPU pods**: unscheduled pods requesting accelerators, how long
+  they have waited, the scheduler's reason, and whether a single node has
+  enough free devices of that type (this check ignores taints and affinity).
+- **Findings**: idle GPU nodes, idle GPUs on nodes busy with non-GPU pods,
+  fragmented capacity (enough free GPUs in total but not on one node), pods
+  that need more GPUs than are free, and free GPUs stuck on cordoned or
+  NotReady nodes.
+
+This is based on pod requests, not measured GPU utilization: a GPU that is
+requested but idle still counts as allocated.
+
 The **GPU MODEL** column comes from node labels, checked in this order:
 `nvidia.com/gpu.product` (NVIDIA GPU Feature Discovery / GPU Operator),
 `cloud.google.com/gke-accelerator` (GKE), and
@@ -286,6 +320,7 @@ At runtime in live view, use keys `1`–`4` to switch sort mode:
 || `p` | Switch to **Pods** view |
 || `o` | Switch to **Nodes** view |
 || `d` | Switch to **Deployments** view |
+|| `G` | Switch to **GPUs** view (pools, GPU nodes, pending GPU pods, findings) |
 || `b` | Toggle **progress bars** on/off |
 || `%` | Toggle **percentages** on progress bars |
 || `r` | Toggle **raw data** display (e.g., "1500m" vs "1.5 / 2.0") |
