@@ -37,7 +37,8 @@ type GPUNodeReport struct {
 	// GPUPods counts pods on the node that request accelerators.
 	GPUPods int `json:"gpuPods"`
 	// OtherPods counts pods that request no accelerators, excluding
-	// DaemonSet pods (device plugins, exporters) that run on every node.
+	// per-node system pods (DaemonSets such as device plugins and exporters,
+	// and static pods such as kube-proxy on GKE).
 	OtherPods int `json:"otherPods"`
 }
 
@@ -182,7 +183,7 @@ func buildGPUNode(node *v1.Node, pods []*v1.Pod) (GPUNodeReport, bool) {
 		switch {
 		case requestsGPU:
 			n.GPUPods++
-		case !isDaemonSetPod(pod):
+		case !isPerNodeSystemPod(pod):
 			n.OtherPods++
 		}
 	}
@@ -207,9 +208,17 @@ func gpuNodeState(node *v1.Node) string {
 	}
 }
 
-func isDaemonSetPod(pod *v1.Pod) bool {
+// mirrorPodAnnotation marks pods the kubelet created from static manifests.
+const mirrorPodAnnotation = "kubernetes.io/config.mirror"
+
+// isPerNodeSystemPod reports whether the pod runs on the node regardless of
+// workload placement: DaemonSet pods and static (mirror) pods.
+func isPerNodeSystemPod(pod *v1.Pod) bool {
+	if _, ok := pod.Annotations[mirrorPodAnnotation]; ok {
+		return true
+	}
 	for _, ref := range pod.OwnerReferences {
-		if ref.Kind == "DaemonSet" {
+		if ref.Kind == "DaemonSet" || ref.Kind == "Node" {
 			return true
 		}
 	}

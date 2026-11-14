@@ -53,6 +53,10 @@ func TestBuildGPUReport(t *testing.T) {
 
 	daemon := gpuPod("kube-system", "dcgm-exporter", "gpu-idle", 0)
 	daemon.OwnerReferences = []metav1.OwnerReference{{Kind: "DaemonSet", Name: "dcgm-exporter"}}
+	// Static pods such as kube-proxy on GKE run on every node.
+	static := gpuPod("kube-system", "kube-proxy-gpu-idle", "gpu-idle", 0)
+	static.Annotations = map[string]string{mirrorPodAnnotation: "abc123"}
+	static.OwnerReferences = []metav1.OwnerReference{{Kind: "Node", Name: "gpu-idle"}}
 
 	pendingFrag := gpuPod("ml", "train-4gpu", "", 4)
 	pendingFrag.CreationTimestamp = metav1.NewTime(now.Add(-2 * time.Hour))
@@ -70,7 +74,7 @@ func TestBuildGPUReport(t *testing.T) {
 	pods := []v1.Pod{
 		gpuPod("ml", "a1", "gpu-a", 4), gpuPod("ml", "a2", "gpu-a", 2),
 		gpuPod("ml", "b1", "gpu-b", 5),
-		daemon, finished,
+		daemon, static, finished,
 		gpuPod("web", "nginx-1", "gpu-busy", 0), gpuPod("web", "nginx-2", "gpu-busy", 0),
 		pendingFrag, pendingFits, pendingHuge,
 	}
@@ -112,7 +116,7 @@ func checkReportNodes(t *testing.T, r *GPUReport) {
 			t.Errorf("%s state = %q, want %q", name, got, want)
 		}
 	}
-	// DaemonSet and finished pods are not counted.
+	// DaemonSet, static, and finished pods are not counted.
 	if n := byName["gpu-idle"]; n.GPUPods != 0 || n.OtherPods != 0 {
 		t.Errorf("gpu-idle pods = %d GPU / %d other, want 0/0", n.GPUPods, n.OtherPods)
 	}
