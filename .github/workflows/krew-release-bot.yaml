@@ -24,22 +24,29 @@ jobs:
       # krew manifest on main. Poll until the manifest version matches
       # the tag, or time out after 45 minutes (the release pipeline,
       # including the manifest update, can take longer than 15 minutes).
-      - name: Wait for manifest to match tag
+      - name: Wait for manifest and GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          echo "Waiting for plugins/krew/glance.yaml to contain version $TAG ..."
+          echo "Waiting for plugins/krew/glance.yaml to contain $TAG and for the GitHub release $TAG to exist ..."
           for i in $(seq 1 90); do
             git fetch origin main --quiet
             git checkout origin/main -- plugins/krew/glance.yaml 2>/dev/null || true
             CURRENT=$(grep 'version:' plugins/krew/glance.yaml | head -1 | tr -d ' "' | cut -d: -f2)
-            echo "  attempt $i: manifest version=$CURRENT, want=$TAG"
-            if [ "$CURRENT" = "$TAG" ]; then
-              echo "Manifest is up to date."
+            # krew-release-bot reads the release by tag, which GitLab CI
+            # creates shortly after the manifest update lands on main.
+            RELEASE=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")
+            echo "  attempt $i: manifest version=$CURRENT, want=$TAG; release HTTP $RELEASE"
+            if [ "$CURRENT" = "$TAG" ] && [ "$RELEASE" = "200" ]; then
+              echo "Manifest and release are ready."
               exit 0
             fi
             sleep 30
           done
-          echo "ERROR: timed out waiting for manifest update"
+          echo "ERROR: timed out waiting for manifest update and GitHub release"
           exit 1
 
       - name: Run krew-release-bot

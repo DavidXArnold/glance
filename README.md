@@ -1024,7 +1024,7 @@ The CI pipeline then:
 4. Creates a GitLab Release with downloadable artifacts
 5. Updates `plugins/krew/glance.yaml` on `main` with the new version and checksums
 6. Mirrors the tag and `main` to GitHub, where the krew-release-bot workflow
-   waits for the manifest and opens a PR in
+   waits for the manifest and the GitHub release, then opens a PR in
    [kubernetes-sigs/krew-index](https://github.com/kubernetes-sigs/krew-index)
 
 If the krew bot times out, re-run the `krew-release-bot` workflow on GitHub
