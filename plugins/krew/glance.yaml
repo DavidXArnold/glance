@@ -3,7 +3,7 @@ kind: Plugin
 metadata:
   name: glance
 spec:
-  version: "v0.4.0"
+  version: "v0.4.1"
   homepage: https://gitlab.com/davidxarnold/glance
   shortDescription: View cluster resource allocation and usage.
   description: |
@@ -34,8 +34,8 @@ spec:
       matchLabels:
         os: darwin
         arch: amd64
-    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.0/kubectl-glance-0.4.0-darwin-amd64.tar.gz
-    sha256: 86eb68a536b965da815aab9d322e3ad686d679a562048fce087e4bee37e85db6
+    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.1/kubectl-glance-0.4.1-darwin-amd64.tar.gz
+    sha256: ad6dfd041798a20da598885264ff3b5caed53183b4a17e21a5890db599b1a5f7
     bin: kubectl-glance
     files:
     - from: "*"
@@ -44,8 +44,8 @@ spec:
       matchLabels:
         os: darwin
         arch: arm64
-    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.0/kubectl-glance-0.4.0-darwin-arm64.tar.gz
-    sha256: bdeee9362be09ef1ebdd62b3d728374d54d8292a26ec0d1692ed8424dd9b3d22
+    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.1/kubectl-glance-0.4.1-darwin-arm64.tar.gz
+    sha256: a8bde106a1a23e1bfa8f18fe068c209b7c3bcf95be8d147600d6982c587b0064
     bin: kubectl-glance
     files:
     - from: "*"
@@ -54,8 +54,8 @@ spec:
       matchLabels:
         os: linux
         arch: amd64
-    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.0/kubectl-glance-0.4.0-linux-amd64.tar.gz
-    sha256: dbfcc712532d59ff070ac1ca0017badec582f621bdaf0b40b8f8c78462ace663
+    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.1/kubectl-glance-0.4.1-linux-amd64.tar.gz
+    sha256: 78cfb3a1e3ef057ca50db4503f8a03a4134004b69e51280ea74950d7440b2201
     bin: kubectl-glance
     files:
     - from: "*"
@@ -64,8 +64,8 @@ spec:
       matchLabels:
         os: linux
         arch: arm64
-    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.0/kubectl-glance-0.4.0-linux-arm64.tar.gz
-    sha256: 07d6b2ad896feec733d788f823d5c041e6519146d9ac57e67e29fc27c23aa8d1
+    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.1/kubectl-glance-0.4.1-linux-arm64.tar.gz
+    sha256: 541a73b109434fb2ae270ce31a58bbef204abd0719a4cd9602f3a53e4a33627b
     bin: kubectl-glance
     files:
     - from: "*"
@@ -74,8 +74,8 @@ spec:
       matchLabels:
         os: windows
         arch: amd64
-    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.0/kubectl-glance-0.4.0-windows-amd64.tar.gz
-    sha256: 9a50ff62a0e1ad836d554f8e6681d334666b3ca4f63fc77dc1de27fd64e5a985
+    uri: https://gitlab.com/api/v4/projects/9502011/packages/generic/kubectl-glance/0.4.1/kubectl-glance-0.4.1-windows-amd64.tar.gz
+    sha256: 7df93f10f59bdebefcd41159ae38f10fa94f78da9fa3b05f42b9e69d3473f849
     bin: kubectl-glance.exe
     files:
     - from: "*"
