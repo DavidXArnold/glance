@@ -44,6 +44,7 @@ func ComputeNodeSnapshot(
 		TotalAllocatedGPULimits:      resource.NewQuantity(0, resource.DecimalSI),
 		TotalUsageCPU:                resource.NewMilliQuantity(0, resource.DecimalSI),
 		TotalUsageMemory:             resource.NewQuantity(0, resource.BinarySI),
+		Accelerators:                 AcceleratorMap{},
 	}
 
 	nm := make(NodeMap, len(nodes))
@@ -88,6 +89,11 @@ func ComputeNodeSnapshot(
 		nm[name] = stats
 	}
 
+	if len(totals.Accelerators) == 0 {
+		totals.Accelerators = nil
+	}
+	totals.GPUGroups = buildGPUGroups(nm)
+
 	return nm, totals, nil
 }
 
@@ -110,26 +116,30 @@ func populateNodeResources(stats *NodeStats, node *v1.Node) {
 		stats.CapacityMemory = &q
 	}
 
-	// GPU allocatable and capacity – scan all extended resources.
-	gpuAllocatable := resource.NewQuantity(0, resource.DecimalSI)
+	// Accelerator allocatable and capacity, per resource type and summed.
+	acc := AcceleratorMap{}
 	for rName, qty := range node.Status.Allocatable {
 		if IsGPUResource(rName) {
-			gpuAllocatable.Add(qty)
+			acc.get(rName).Allocatable = qty.Value()
 		}
 	}
-	if !gpuAllocatable.IsZero() {
-		stats.AllocatableGPU = gpuAllocatable
-	}
-
-	gpuCapacity := resource.NewQuantity(0, resource.DecimalSI)
 	for rName, qty := range node.Status.Capacity {
 		if IsGPUResource(rName) {
-			gpuCapacity.Add(qty)
+			acc.get(rName).Capacity = qty.Value()
 		}
 	}
-	if !gpuCapacity.IsZero() {
+	if len(acc) == 0 {
+		return
+	}
+	stats.Accelerators = acc
+
+	if gpuAllocatable := SumAccelerators(node.Status.Allocatable); !gpuAllocatable.IsZero() {
+		stats.AllocatableGPU = gpuAllocatable
+	}
+	if gpuCapacity := SumAccelerators(node.Status.Capacity); !gpuCapacity.IsZero() {
 		stats.CapacityGPU = gpuCapacity
 	}
+	stats.GPUModel, stats.GPUMemoryMiB = GPUModelFromLabels(node.Labels)
 }
 
 // aggregatePodResources sums CPU, memory, and GPU requests/limits from all pods into stats.
@@ -143,29 +153,33 @@ func aggregatePodResources(stats *NodeStats, pods []v1.Pod) {
 	gpuReq := resource.NewQuantity(0, resource.DecimalSI)
 	gpuLim := resource.NewQuantity(0, resource.DecimalSI)
 
-	for _, pod := range pods {
-		for _, container := range pod.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Cpu(); lim != nil {
-				cpuLim.Add(*lim)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Memory(); lim != nil {
-				memLim.Add(*lim)
-			}
-			for rName, qty := range container.Resources.Requests {
-				if IsGPUResource(rName) {
-					gpuReq.Add(qty)
+	for i := range pods {
+		// Use the scheduler's view of the pod so init containers, sidecars,
+		// overhead and pod-level resources are accounted for.
+		reqs := PodRequests(&pods[i])
+		lims := PodLimits(&pods[i])
+
+		cpuReq.Add(*reqs.Cpu())
+		cpuLim.Add(*lims.Cpu())
+		memReq.Add(*reqs.Memory())
+		memLim.Add(*lims.Memory())
+
+		for rName, qty := range reqs {
+			if IsGPUResource(rName) {
+				gpuReq.Add(qty)
+				if stats.Accelerators == nil {
+					stats.Accelerators = AcceleratorMap{}
 				}
+				stats.Accelerators.get(rName).Requests += qty.Value()
 			}
-			for rName, qty := range container.Resources.Limits {
-				if IsGPUResource(rName) {
-					gpuLim.Add(qty)
+		}
+		for rName, qty := range lims {
+			if IsGPUResource(rName) {
+				gpuLim.Add(qty)
+				if stats.Accelerators == nil {
+					stats.Accelerators = AcceleratorMap{}
 				}
+				stats.Accelerators.get(rName).Limits += qty.Value()
 			}
 		}
 	}
@@ -221,6 +235,9 @@ func accumulateTotals(totals *Totals, stats *NodeStats) {
 	}
 	totals.TotalAllocatedGPURequests.Add(stats.AllocatedGPURequests)
 	totals.TotalAllocatedGPULimits.Add(stats.AllocatedGPULimits)
+	for name, acc := range stats.Accelerators {
+		totals.Accelerators.get(name).add(acc)
+	}
 
 	if stats.UsageCPU != nil {
 		totals.TotalUsageCPU.Add(*stats.UsageCPU)

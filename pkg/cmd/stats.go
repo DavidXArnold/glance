@@ -109,30 +109,15 @@ func CollectPodStats(
 		gpuReq := resource.NewQuantity(0, resource.DecimalSI)
 		gpuLimit := resource.NewQuantity(0, resource.DecimalSI)
 
-		for _, container := range pod.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Cpu(); lim != nil {
-				cpuLimit.Add(*lim)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Memory(); lim != nil {
-				memLimit.Add(*lim)
-			}
-			for rName, qty := range container.Resources.Requests {
-				if core.IsGPUResource(rName) {
-					gpuReq.Add(qty)
-				}
-			}
-			for rName, qty := range container.Resources.Limits {
-				if core.IsGPUResource(rName) {
-					gpuLimit.Add(qty)
-				}
-			}
-		}
+		// Effective requests/limits as the scheduler computes them (init
+		// containers, sidecars, overhead and pod-level resources included).
+		r := effectivePodResources(pod)
+		cpuReq.Add(r.cpuReq)
+		cpuLimit.Add(r.cpuLimit)
+		memReq.Add(r.memReq)
+		memLimit.Add(r.memLimit)
+		gpuReq.Add(r.gpuReq)
+		gpuLimit.Add(r.gpuLimit)
 
 		if pm, ok := metricsMap[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}]; ok {
 			for _, container := range pm.Containers {
@@ -193,30 +178,15 @@ func CollectDeploymentStats(
 		gpuReq := resource.NewQuantity(0, resource.DecimalSI)
 		gpuLimit := resource.NewQuantity(0, resource.DecimalSI)
 
-		for _, container := range deploy.Spec.Template.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Cpu(); lim != nil {
-				cpuLimit.Add(*lim)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Memory(); lim != nil {
-				memLimit.Add(*lim)
-			}
-			for rName, qty := range container.Resources.Requests {
-				if core.IsGPUResource(rName) {
-					gpuReq.Add(qty)
-				}
-			}
-			for rName, qty := range container.Resources.Limits {
-				if core.IsGPUResource(rName) {
-					gpuLimit.Add(qty)
-				}
-			}
-		}
+		// Effective requests/limits as the scheduler computes them (init
+		// containers, sidecars, overhead and pod-level resources included).
+		r := effectivePodResources(&v1.Pod{Spec: deploy.Spec.Template.Spec})
+		cpuReq.Add(r.cpuReq)
+		cpuLimit.Add(r.cpuLimit)
+		memReq.Add(r.memReq)
+		memLimit.Add(r.memLimit)
+		gpuReq.Add(r.gpuReq)
+		gpuLimit.Add(r.gpuLimit)
 
 		replicas := int32(1)
 		if deploy.Spec.Replicas != nil {
@@ -271,4 +241,28 @@ func buildListOptions(selector labels.Selector, fieldSelector fields.Selector) m
 		listOptions.FieldSelector = fieldSelector.String()
 	}
 	return listOptions
+}
+
+// podResources holds a pod's effective CPU, memory, and accelerator requests
+// and limits.
+type podResources struct {
+	cpuReq, cpuLimit resource.Quantity
+	memReq, memLimit resource.Quantity
+	gpuReq, gpuLimit resource.Quantity
+}
+
+// effectivePodResources computes a pod's requests and limits the way the
+// scheduler does, so init containers, sidecars, pod overhead, and pod-level
+// resources are counted. Accelerators are summed across resource types.
+func effectivePodResources(pod *v1.Pod) podResources {
+	reqs := core.PodRequests(pod)
+	lims := core.PodLimits(pod)
+	return podResources{
+		cpuReq:   *reqs.Cpu(),
+		cpuLimit: *lims.Cpu(),
+		memReq:   *reqs.Memory(),
+		memLimit: *lims.Memory(),
+		gpuReq:   *core.SumAccelerators(reqs),
+		gpuLimit: *core.SumAccelerators(lims),
+	}
 }

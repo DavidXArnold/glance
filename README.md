@@ -18,7 +18,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 - 🔄 **Live Monitoring** - Real-time TUI with auto-refresh for continuous observation
 - 🎯 **Multiple View Modes** - Nodes (default), Namespaces with navigation, Pods, and Deployments
 - 📈 **Resource Metrics** - CPU and memory requests, limits, and actual usage with ratio formatting
-- 🎮 **GPU Support** - NVIDIA, AMD, and other GPU resources with auto-detection and `--show-gpu` flag
+- 🎮 **GPU & Accelerator Support** - NVIDIA (including MIG and shared GPUs), AMD, Intel, AWS Neuron, Gaudi, and TPU resources with per-type counts, GPU model detection, and `--show-gpu` auto-detection
 - ☁️ **Cloud Provider Integration** - Optional AWS/GCP node metadata columns, enabled explicitly via flags or live view toggles
 - 🔍 **Flexible Filtering** - Label and field selectors for targeted views
 - 📏 **Value Display Options** - Human-readable ratios or raw Kubernetes resource values
@@ -193,10 +193,37 @@ kubectl glance --show-node-age             # add AGE column
 kubectl glance --show-node-group           # add GROUP column
 kubectl glance --show-node-version=false   # hide VERSION column
 kubectl glance --show-gpu                  # show GPU columns (auto-enabled when GPUs detected)
+kubectl glance --gpu-resources 'example.com/npu,vendor.io/*'  # count extra device-plugin resources as GPUs
 
 # Combine options
 kubectl glance -c -p -o pretty --exact --show-node-age --show-node-group
 ```
+
+### GPUs and other accelerators
+
+Glance recognizes these extended resources as accelerators:
+
+| Vendor | Resources |
+|---|---|
+| NVIDIA | `nvidia.com/gpu`, `nvidia.com/gpu.shared` (time-slicing/MPS), `nvidia.com/mig-*` (MIG slices) |
+| AMD | `amd.com/gpu` |
+| Intel | `gpu.intel.com/i915`, `gpu.intel.com/xe` |
+| AWS | `aws.amazon.com/neuron`, `aws.amazon.com/neurondevice`, `aws.amazon.com/neuroncore` |
+| Habana | `habana.ai/gaudi` |
+| Google | `google.com/tpu` |
+| Any | resources ending in `/gpu`, plus anything passed with `--gpu-resources` |
+
+Counts are kept per resource type, so a node with one full GPU and seven MIG
+slices shows `1 / 1 gpu, 3 / 7 mig-1g.10gb` rather than a misleading `4 / 8`.
+Requests follow the scheduler's rules: init containers, sidecars, and pod
+overhead are included.
+
+The **GPU MODEL** column comes from node labels, checked in this order:
+`nvidia.com/gpu.product` (NVIDIA GPU Feature Discovery / GPU Operator),
+`cloud.google.com/gke-accelerator` (GKE), and
+`karpenter.k8s.aws/instance-gpu-name` (Karpenter on AWS). Nodes without these
+labels show `unknown`. The cluster summary in `-o pretty` breaks allocation
+down by model and resource type.
 
 ### Live View
 
@@ -594,6 +621,7 @@ kubectl glance -o json \
 ||| `--show-node-age` | | `false` | Show AGE column (node creation time) in static output |
 |||| `--show-node-group` | | `false` | Show GROUP column (cloud node group/pool, where available) in static output |
 |||| `--show-gpu` | | `false` | Show GPU resource columns (auto-enabled when GPU nodes are detected) |
+|||| `--gpu-resources` | | | Extra extended resource names or glob patterns to count as GPUs/accelerators (e.g. `example.com/npu,vendor.io/*`) |
 
 **Static subcommands** (`kubectl glance pods`, `kubectl glance deployments`) reuse
 these selectors and output flags, and additionally honor the global `--namespace`
@@ -667,6 +695,7 @@ show-node-version: false
 show-node-age: false
 show-node-group: false
 show-gpu: false           # auto-enabled when GPU nodes detected
+gpu-resources: []         # extra accelerator resources/globs, e.g. ["example.com/npu"]
 ```
 
 **Cloud Cache Settings:**

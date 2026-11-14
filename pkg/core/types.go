@@ -16,7 +16,6 @@ limitations under the License.
 package core
 
 import (
-	"strings"
 	"time"
 
 	containerpb "cloud.google.com/go/container/apiv1/containerpb"
@@ -25,51 +24,40 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// Well-known GPU extended resource names.
-const (
-	ResourceNvidiaGPU v1.ResourceName = "nvidia.com/gpu"
-	ResourceAMDGPU    v1.ResourceName = "amd.com/gpu"
-)
-
-// IsGPUResource returns true if the resource name represents a GPU device.
-// It recognises nvidia.com/gpu and amd.com/gpu as well as any resource whose
-// name contains "/gpu" (e.g. intel.com/gpu) for forward compatibility.
-func IsGPUResource(name v1.ResourceName) bool {
-	if name == ResourceNvidiaGPU || name == ResourceAMDGPU {
-		return true
-	}
-	return strings.HasSuffix(string(name), "/gpu")
-}
-
 // NodeStats holds relevant node statistics including resource allocation and usage.
 type NodeStats struct {
-	Status                  string              `json:",omitempty"`
-	ProviderID              string              `json:",omitempty"`
-	Region                  string              `json:",omitempty"`
-	InstanceType            string              `json:",omitempty"`
-	NodeGroup               string              `json:",omitempty"` // AWS EKS node group
-	NodePool                string              `json:",omitempty"` // GCP GKE node pool
-	FargateProfile          string              `json:",omitempty"` // AWS Fargate profile
-	CapacityType            string              `json:",omitempty"` // ON_DEMAND, SPOT, etc.
-	NodeInfo                v1.NodeSystemInfo   `json:",omitempty"`
-	CloudInfo               cloudInfo           `json:",omitempty"`
-	AllocatableCPU          *resource.Quantity  `json:",omitempty"`
-	AllocatableMemory       *resource.Quantity  `json:",omitempty"`
-	CapacityCPU             *resource.Quantity  `json:",omitempty"`
-	CapacityMemory          *resource.Quantity  `json:",omitempty"`
-	AllocatedCPUrequests    resource.Quantity   `json:",omitempty"`
-	AllocatedCPULimits      resource.Quantity   `json:",omitempty"`
-	AllocatedMemoryRequests resource.Quantity   `json:",omitempty"`
-	AllocatedMemoryLimits   resource.Quantity   `json:",omitempty"`
-	AllocatableGPU          *resource.Quantity  `json:",omitempty"`
-	CapacityGPU             *resource.Quantity  `json:",omitempty"`
-	AllocatedGPURequests    resource.Quantity   `json:",omitempty"`
-	AllocatedGPULimits      resource.Quantity   `json:",omitempty"`
-	UsageCPU                *resource.Quantity  `json:",omitempty"`
-	UsageMemory             *resource.Quantity  `json:",omitempty"`
-	PodInfo                 map[string]*PodInfo `json:",omitempty"`
-	CreationTime            time.Time           `json:",omitempty"`
-	PodCount                int                 `json:",omitempty"`
+	Status                  string             `json:",omitempty"`
+	ProviderID              string             `json:",omitempty"`
+	Region                  string             `json:",omitempty"`
+	InstanceType            string             `json:",omitempty"`
+	NodeGroup               string             `json:",omitempty"` // AWS EKS node group
+	NodePool                string             `json:",omitempty"` // GCP GKE node pool
+	FargateProfile          string             `json:",omitempty"` // AWS Fargate profile
+	CapacityType            string             `json:",omitempty"` // ON_DEMAND, SPOT, etc.
+	NodeInfo                v1.NodeSystemInfo  `json:",omitempty"`
+	CloudInfo               cloudInfo          `json:",omitempty"`
+	AllocatableCPU          *resource.Quantity `json:",omitempty"`
+	AllocatableMemory       *resource.Quantity `json:",omitempty"`
+	CapacityCPU             *resource.Quantity `json:",omitempty"`
+	CapacityMemory          *resource.Quantity `json:",omitempty"`
+	AllocatedCPUrequests    resource.Quantity  `json:",omitempty"`
+	AllocatedCPULimits      resource.Quantity  `json:",omitempty"`
+	AllocatedMemoryRequests resource.Quantity  `json:",omitempty"`
+	AllocatedMemoryLimits   resource.Quantity  `json:",omitempty"`
+	AllocatableGPU          *resource.Quantity `json:",omitempty"`
+	CapacityGPU             *resource.Quantity `json:",omitempty"`
+	AllocatedGPURequests    resource.Quantity  `json:",omitempty"`
+	AllocatedGPULimits      resource.Quantity  `json:",omitempty"`
+	// Accelerators breaks GPU counts down by resource type (nvidia.com/gpu,
+	// nvidia.com/mig-1g.5gb, ...). The *GPU fields above sum across types.
+	Accelerators AcceleratorMap      `json:",omitempty"`
+	GPUModel     string              `json:",omitempty"`
+	GPUMemoryMiB int64               `json:",omitempty"`
+	UsageCPU     *resource.Quantity  `json:",omitempty"`
+	UsageMemory  *resource.Quantity  `json:",omitempty"`
+	PodInfo      map[string]*PodInfo `json:",omitempty"`
+	CreationTime time.Time           `json:",omitempty"`
+	PodCount     int                 `json:",omitempty"`
 }
 
 // NodeMap is a map of node names to their statistics.
@@ -112,6 +100,8 @@ type Totals struct {
 	TotalCapacityGPU             *resource.Quantity `json:",omitempty"`
 	TotalAllocatedGPURequests    *resource.Quantity `json:",omitempty"`
 	TotalAllocatedGPULimits      *resource.Quantity `json:",omitempty"`
+	Accelerators                 AcceleratorMap     `json:",omitempty"`
+	GPUGroups                    []GPUGroup         `json:",omitempty"`
 	TotalUsageCPU                *resource.Quantity `json:",omitempty"`
 	TotalUsageMemory             *resource.Quantity `json:",omitempty"`
 }

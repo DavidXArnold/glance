@@ -53,6 +53,7 @@ const (
 	headerCPUUsage       = "CPU USAGE/LIMITS"
 	headerMemoryRequests = "MEMORY REQUESTS/LIMITS"
 	headerMemoryUsage    = "MEMORY USAGE/LIMITS"
+	headerGPUModel       = "GPU MODEL"
 )
 
 // Structured log field keys used when reporting cloud metadata lookups.
