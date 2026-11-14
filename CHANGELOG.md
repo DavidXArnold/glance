@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-14
+
 ### Added
 - `-A/--all-namespaces` for `kubectl glance pods` and `kubectl glance deployments`, matching kubectl; previously these could only show one namespace (#35).
 - `--require-metrics` flag for the node view to keep the old strict behavior of failing when metrics-server is unavailable (#42).
@@ -308,7 +310,8 @@ Tagged `v0.2.5`; the binary reports version 0.2.4 because `version/version.go` w
 - **Fixed**: Bug fixes
 - **Security**: Security fixes
 
-[Unreleased]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.1...main
+[Unreleased]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.2...main
+[0.4.2]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.1...v0.4.2
 [0.4.1]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.0...v0.4.1
 [0.4.0]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.3...v0.4.0
 [0.3.3]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.2...v0.3.3
