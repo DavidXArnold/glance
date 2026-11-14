@@ -22,12 +22,13 @@ jobs:
 
       # The tag is mirrored before GitLab CI finishes updating the
       # krew manifest on main. Poll until the manifest version matches
-      # the tag, or time out after 15 minutes.
+      # the tag, or time out after 45 minutes (the release pipeline,
+      # including the manifest update, can take longer than 15 minutes).
       - name: Wait for manifest to match tag
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           echo "Waiting for plugins/krew/glance.yaml to contain version $TAG ..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 90); do
             git fetch origin main --quiet
             git checkout origin/main -- plugins/krew/glance.yaml 2>/dev/null || true
             CURRENT=$(grep 'version:' plugins/krew/glance.yaml | head -1 | tr -d ' "' | cut -d: -f2)

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `kubectl glance gpus` command (aliases `gpu`, `accelerators`) for finding wasted GPUs: free devices and the largest free block per GPU model and type, per-node GPU and non-GPU pod counts, pending GPU pods and whether they fit, and findings for idle GPU nodes, fragmentation, insufficient capacity, and free GPUs on cordoned or NotReady nodes. Supports `-o txt|pretty|json` (#49).
 - Live mode **GPUs** view (`G` key) with the same pools, nodes, pending pods, and findings (#49).
 
+### Fixed
+- Krew release automation waits up to 45 minutes (was 15) for the manifest update, so slow release pipelines no longer need a manual re-run.
+
 ## [0.3.3] - 2026-11-14
 
 ### Added
