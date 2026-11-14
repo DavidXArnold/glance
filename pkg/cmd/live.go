@@ -46,6 +46,7 @@ const (
 	ViewPods
 	ViewNodes
 	ViewDeployments
+	ViewGPUs
 )
 
 const (
@@ -369,7 +370,7 @@ func runLive(
 	state.menuBar = widgets.NewParagraph()
 
 	state.menuBar.Border = false
-	state.menuBar.Text = " Views: [o]Nodes [n]Namespaces [p]Pods [d]Deployments | " +
+	state.menuBar.Text = " Views: [o]Nodes [n]Namespaces [p]Pods [d]Deployments [G]GPUs | " +
 		"Toggle: [b]Bars [%]Percent [r]Raw [u]GPU [w]Cloud [v]Version [a]Age [g]Group\n" +
 		" Sort: [1]Status [2]Name [3]CPU [4]Memory | [?]Settings [q]Quit"
 	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
@@ -401,6 +402,15 @@ func runLive(
 }
 
 // handleUIEvent processes UI events and returns true if the app should exit.
+// viewModeKeys maps keys to the views they switch to (except "n", which also
+// resets the namespace selection).
+var viewModeKeys = map[string]ViewMode{
+	"p": ViewPods,
+	"o": ViewNodes,
+	"d": ViewDeployments,
+	"G": ViewGPUs,
+}
+
 func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) bool {
 	// Handle confirmation dialog first if active
 	if state.showConfirmDiscard {
@@ -435,12 +445,8 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		state.mode = ViewNamespaces
 		state.selectedNamespace = ""
 		state.selectedNamespaceIndex = 0
-	case "p":
-		state.mode = ViewPods
-	case "o":
-		state.mode = ViewNodes
-	case "d":
-		state.mode = ViewDeployments
+	case "p", "o", "d", "G":
+		state.mode = viewModeKeys[e.ID]
 	case "b":
 		state.showBars = !state.showBars
 		viper.Set("show-bars", state.showBars)
@@ -565,27 +571,33 @@ func min(a, b int) int {
 	return b
 }
 
+// fetchViewData fetches the header, rows, and per-row metrics for the current view.
+func fetchViewData(
+	ctx context.Context,
+	k8sClient *kubernetes.Clientset,
+	gc *GlanceConfig,
+	state *LiveState,
+) (header []string, data [][]string, metrics []ResourceMetrics, err error) {
+	switch state.mode {
+	case ViewNamespaces:
+		return fetchNamespaceData(ctx, k8sClient, gc, state)
+	case ViewPods:
+		return fetchPodData(ctx, k8sClient, gc, state.selectedNamespace, state)
+	case ViewNodes:
+		return fetchNodeData(ctx, k8sClient, gc, state)
+	case ViewDeployments:
+		return fetchDeploymentData(ctx, k8sClient, state.selectedNamespace)
+	case ViewGPUs:
+		header, data, err = fetchGPUData(ctx, k8sClient)
+		return header, data, nil, err
+	}
+	return nil, nil, nil, nil
+}
+
 func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) error {
 	termWidth, termHeight := ui.TerminalDimensions()
 
-	var data [][]string
-	var header []string
-	var metrics []ResourceMetrics
-	var err error
-
-	ctx := context.Background()
-
-	switch state.mode {
-	case ViewNamespaces:
-		header, data, metrics, err = fetchNamespaceData(ctx, k8sClient, gc, state)
-	case ViewPods:
-		header, data, metrics, err = fetchPodData(ctx, k8sClient, gc, state.selectedNamespace, state)
-	case ViewNodes:
-		header, data, metrics, err = fetchNodeData(ctx, k8sClient, gc, state)
-	case ViewDeployments:
-		header, data, metrics, err = fetchDeploymentData(ctx, k8sClient, state.selectedNamespace)
-	}
-
+	header, data, metrics, err := fetchViewData(context.Background(), k8sClient, gc, state)
 	if err != nil {
 		return err
 	}
@@ -634,8 +646,9 @@ func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *Liv
 	state.table.SetRect(0, summaryHeight, termWidth, tableHeight+summaryHeight)
 	state.table.RowStyles[0] = ui.NewStyle(ui.ColorWhite, ui.ColorBlack, ui.ModifierBold)
 
-	// Apply row coloring based on utilization (skip for deployments - they don't have usage metrics)
-	if state.mode != ViewDeployments {
+	// Apply row coloring based on utilization (skip for deployments and
+	// GPUs - they don't have usage metrics)
+	if state.mode != ViewDeployments && state.mode != ViewGPUs {
 		applyRowColors(state.table, metrics, state.showBars)
 	} else {
 		// Clear any previous row styles for deployments
@@ -1196,7 +1209,7 @@ func fetchPodData(
 	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
-		"POD",
+		headerPod,
 		headerCPURequests,
 		headerCPUUsage,
 		headerMemoryRequests,
@@ -1402,7 +1415,7 @@ func fetchNodeMetricsAndPods(
 		var err error
 		allPods, err = k8sClient.CoreV1().Pods("").List(gCtx, metav1.ListOptions{
 			ResourceVersion: "0",
-			FieldSelector:   "status.phase!=Succeeded,status.phase!=Failed",
+			FieldSelector:   nonTerminatedPods,
 		})
 		return err
 	})
@@ -1942,6 +1955,8 @@ func getModeString(mode ViewMode) string {
 		return "NODES"
 	case ViewDeployments:
 		return "DEPLOYMENTS"
+	case ViewGPUs:
+		return "GPUS"
 	default:
 		return "UNKNOWN"
 	}
@@ -2615,4 +2630,74 @@ func handleConfirmEvent(e ui.Event, state *LiveState) {
 		// Return to modal
 		state.showConfirmDiscard = false
 	}
+}
+
+// fetchGPUData builds the live GPU view: one row per GPU pool (model and
+// accelerator type), one per GPU node, and one per pending GPU pod, followed
+// by findings, separated by blank rows.
+func fetchGPUData(ctx context.Context, k8sClient kubernetes.Interface) ([]string, [][]string, error) {
+	header := []string{"NAME", headerGPUModel, "STATE", "GPU REQ/ALLOC", headerFree, "GPU PODS", "OTHER PODS"}
+
+	report, err := collectGPUReport(ctx, k8sClient)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(report.Nodes) == 0 {
+		return header, [][]string{{"No GPU nodes found", "", "", "", "", "", ""}}, nil
+	}
+
+	blank := make([]string, len(header))
+	var data [][]string
+	for i := range report.Pools {
+		p := &report.Pools[i]
+		data = append(data, []string{
+			"POOL " + core.ShortAcceleratorName(p.Resource),
+			p.Model,
+			fmt.Sprintf("largest free %d", p.LargestFreeBlock),
+			fmt.Sprintf("%d / %d", p.Requests, p.Allocatable),
+			fmt.Sprintf("%d", p.Free),
+			"", "",
+		})
+	}
+
+	data = append(data, blank)
+	for i := range report.Nodes {
+		n := &report.Nodes[i]
+		var free int64
+		for _, acc := range n.Accelerators {
+			free += acc.Free()
+		}
+		data = append(data, []string{
+			n.Name, n.Model, n.State,
+			formatAcceleratorRatios(n.Accelerators, ", "),
+			fmt.Sprintf("%d", free),
+			fmt.Sprintf("%d", n.GPUPods),
+			fmt.Sprintf("%d", n.OtherPods),
+		})
+	}
+
+	if len(report.Pending) > 0 {
+		data = append(data, blank)
+		for i := range report.Pending {
+			p := &report.Pending[i]
+			fits := "pending, fits"
+			if !p.Fits {
+				fits = "pending, no fit"
+			}
+			data = append(data, []string{
+				p.Namespace + "/" + p.Name, "", fits,
+				fmt.Sprintf("%d %s", p.Requested, core.ShortAcceleratorName(p.Resource)),
+				fmt.Sprintf("largest %d", p.LargestFreeBlock),
+				glanceutil.FormatDuration(p.Age), "",
+			})
+		}
+	}
+
+	if len(report.Findings) > 0 {
+		data = append(data, blank)
+		for _, f := range report.Findings {
+			data = append(data, []string{"! " + gpuFindingTitles[f.Kind], f.Subject, f.Message, "", "", "", ""})
+		}
+	}
+	return header, data, nil
 }

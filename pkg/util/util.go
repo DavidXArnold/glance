@@ -51,8 +51,12 @@ func FormatAge(t time.Time) string {
 	if t.IsZero() {
 		return "0s"
 	}
+	return FormatDuration(time.Since(t))
+}
 
-	duration := time.Since(t)
+// FormatDuration formats a duration the way kubectl formats ages
+// (e.g. "45s", "12m", "3h", "2d4hr"). Negative durations format as "0s".
+func FormatDuration(duration time.Duration) string {
 	if duration < 0 {
 		duration = 0
 	}
