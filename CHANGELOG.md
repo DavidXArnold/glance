@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-14
+
 ### Added
 - GPU MODEL column in node views (static and live) when GPU columns are shown, read from `nvidia.com/gpu.product` (NVIDIA GPU Feature Discovery), `cloud.google.com/gke-accelerator` (GKE), or `karpenter.k8s.aws/instance-gpu-name` (Karpenter) node labels (#48).
 - The `-o pretty` cluster summary breaks GPU allocation down by model and accelerator type, including free devices (#48).
