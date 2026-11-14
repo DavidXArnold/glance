@@ -28,7 +28,7 @@ spec:
       kubectl glance -c                 # Include cloud provider info
   caveats: |
     This plugin requires kubectl 1.12 or higher.
-    For cloud provider information (--cloud-info), ensure proper cloud credentials are configured.
+    For cloud provider information (--show-cloud-provider), ensure proper cloud credentials are configured.
   platforms:
   - selector:
       matchLabels:

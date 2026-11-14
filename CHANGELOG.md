@@ -8,7 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `-A/--all-namespaces` for `kubectl glance pods` and `kubectl glance deployments`, matching kubectl; previously these could only show one namespace (#35).
+- `--require-metrics` flag for the node view to keep the old strict behavior of failing when metrics-server is unavailable (#42).
+- Release archives and `checksums.txt` are attached to the GitHub release, and the krew manifest downloads from there, so GitHub's per-asset download counts track krew installs and upgrades. See "Download statistics" in the README.
+
+### Changed
+- The node view (`kubectl glance`) no longer fails without metrics-server: it prints a warning and shows requests, limits and capacity with usage as `n/a`. JSON reports `TotalUsageCPU`/`TotalUsageMemory` as `null` in that case. A metrics-server that is installed but not ready (`ServiceUnavailable`) is treated the same way (#42).
+- Pod STATUS shows the effective state like `kubectl get pods` (`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`, `Terminating`, `Init:1/2`, `Completed`, ...) instead of the phase, in the static pods view and the live Pods view. Unhealthy pods now sort first under status sort (#38).
+- CI lint: `.golangci.yml` migrated to the golangci-lint v2 schema so its settings actually apply; fixed the resulting findings and tuned thresholds that flag existing code awaiting the `live.go` split (#43) (#46).
+
 ### Fixed
+- Live settings panel (`?`): the selected setting no longer scrolls out of view. The panel fits the terminal, keeps its header row visible, and shows the selected setting's position (#50).
+- Live settings panel checkboxes and filter values showed as `[✓` / `[none` because the closing bracket was dropped.
+- Deployment CPU requests and limits were rounded up to whole cores before multiplying by replicas (a 100m request showed as `1.0`).
+- `--show-cloud-provider` help text claimed the flag is enabled by default and repeated the flag name; it is off by default (#37).
+- `-o dash` and `-o pie` no longer crash on nodes without usage metrics.
 - Krew release automation also waits for the GitHub release to exist before running the krew bot, which previously failed with `404` when the release was created a few seconds after the manifest update.
 
 ## [0.4.1] - 2026-11-14

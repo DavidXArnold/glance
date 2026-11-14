@@ -7,19 +7,22 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 // NewPodsCmd creates the static "glance pods" subcommand.
 func NewPodsCmd(gc *GlanceConfig) *cobra.Command {
+	var allNamespaces bool
 	cmd := &cobra.Command{
 		Use:   "pods",
 		Short: "Show pod-level resource usage (static view)",
 		Long: `Display a static snapshot of pod-level resource requests, limits, and usage.
 
 This mirrors the live Pods view but runs once and exits, suitable for scripting.
-Respects --namespace/-n, --selector, --field-selector, and --output.`,
+Uses the kubeconfig context's namespace; pass -n to pick one or -A for all namespaces.
+Respects --selector, --field-selector, and --output.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -46,12 +49,7 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 				return err
 			}
 
-			// Determine namespace from kubeconfig/flags; empty means all namespaces.
-			namespace, _, err := gc.configFlags.ToRawKubeConfigLoader().Namespace()
-			if err != nil {
-				log.Debugf("Failed to determine namespace for pods: %v", err)
-				namespace = ""
-			}
+			namespace := resolveNamespace(gc, allNamespaces)
 
 			ctx := context.Background()
 			rows, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, selector, fieldSelector)
@@ -71,18 +69,21 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 		},
 	}
 
+	addAllNamespacesFlag(cmd, &allNamespaces)
 	return cmd
 }
 
 // NewDeploymentsCmd creates the static "glance deployments" subcommand.
 func NewDeploymentsCmd(gc *GlanceConfig) *cobra.Command {
+	var allNamespaces bool
 	cmd := &cobra.Command{
 		Use:   "deployments",
 		Short: "Show deployment-level resource usage (static view)",
 		Long: `Display a static snapshot of deployment-level resource requests, limits, and replica status.
 
 This mirrors the live Deployments view but runs once and exits.
-Respects --namespace/-n, --selector, --field-selector, and --output.`,
+Uses the kubeconfig context's namespace; pass -n to pick one or -A for all namespaces.
+Respects --selector, --field-selector, and --output.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -103,12 +104,7 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 				return err
 			}
 
-			// Determine namespace from kubeconfig/flags; empty means all namespaces.
-			namespace, _, err := gc.configFlags.ToRawKubeConfigLoader().Namespace()
-			if err != nil {
-				log.Debugf("Failed to determine namespace for deployments: %v", err)
-				namespace = ""
-			}
+			namespace := resolveNamespace(gc, allNamespaces)
 
 			ctx := context.Background()
 			rows, err := CollectDeploymentStats(ctx, k8sClient, namespace, selector, fieldSelector)
@@ -128,5 +124,27 @@ Respects --namespace/-n, --selector, --field-selector, and --output.`,
 		},
 	}
 
+	addAllNamespacesFlag(cmd, &allNamespaces)
 	return cmd
+}
+
+// addAllNamespacesFlag adds kubectl's -A/--all-namespaces flag.
+func addAllNamespacesFlag(cmd *cobra.Command, allNamespaces *bool) {
+	cmd.Flags().BoolVarP(allNamespaces, "all-namespaces", "A", false,
+		"List across all namespaces, overriding the kubeconfig context's namespace and -n")
+}
+
+// resolveNamespace returns the namespace a static view should query: all
+// namespaces ("") with -A, otherwise -n or the kubeconfig context's
+// namespace, which falls back to "default".
+func resolveNamespace(gc *GlanceConfig, allNamespaces bool) string {
+	if allNamespaces {
+		return metav1.NamespaceAll
+	}
+	namespace, _, err := gc.configFlags.ToRawKubeConfigLoader().Namespace()
+	if err != nil {
+		log.Debugf("Failed to determine namespace, using %q: %v", metav1.NamespaceDefault, err)
+		return metav1.NamespaceDefault
+	}
+	return namespace
 }

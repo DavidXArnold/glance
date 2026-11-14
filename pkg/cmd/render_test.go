@@ -521,3 +521,51 @@ func TestFormatCPUAndMemoryQuantity(t *testing.T) {
 		t.Errorf("formatCPUQuantity(nil) = %q, want empty", got)
 	}
 }
+
+// TestRenderWithoutMetrics checks that nodes and totals without usage (no
+// metrics-server) render usage as n/a rather than blank or 0% (issue #42).
+func TestRenderWithoutMetrics(t *testing.T) {
+	cpu := resource.MustParse("4")
+	mem := resource.MustParse("8Gi")
+	node := &core.NodeStats{
+		Status:                  "Ready",
+		AllocatableCPU:          &cpu,
+		AllocatableMemory:       &mem,
+		AllocatedCPUrequests:    resource.MustParse("1"),
+		AllocatedMemoryRequests: resource.MustParse("2Gi"),
+	}
+	totals := &core.Totals{
+		TotalAllocatableCPU:          &cpu,
+		TotalAllocatableMemory:       &mem,
+		TotalAllocatedCPUrequests:    resource.NewMilliQuantity(1000, resource.DecimalSI),
+		TotalAllocatedCPULimits:      resource.NewMilliQuantity(0, resource.DecimalSI),
+		TotalAllocatedMemoryRequests: resource.NewQuantity(2<<30, resource.BinarySI),
+		TotalAllocatedMemoryLimits:   resource.NewQuantity(0, resource.BinarySI),
+	}
+
+	row := buildTableRow("n1", node, false, false, false, false, false)
+	footer := buildTableFooter(totals, 1, false, false, false, false, false)
+	// Columns: name, status, cpu req, cpu lim, cpu use, cpu %, mem req, mem lim, mem use, mem %.
+	for _, r := range []struct {
+		name string
+		row  []interface{}
+	}{{"node row", row}, {"footer", footer}} {
+		if r.row[4] != usageNA || r.row[8] != usageNA {
+			t.Errorf("%s usage cells = %v / %v, want %q", r.name, r.row[4], r.row[8], usageNA)
+		}
+	}
+
+	for name, cell := range map[string]string{
+		"cpu cell":       buildCPUUtilizationCell(node),
+		"memory cell":    buildMemUtilizationCell(node),
+		"cpu total cell": buildTotalCPUCell(totals),
+		"memory total":   buildTotalMemCell(totals),
+	} {
+		if !strings.Contains(cell, "Usage: "+usageNA) {
+			t.Errorf("%s = %q, want usage shown as %q", name, cell, usageNA)
+		}
+	}
+	if !strings.Contains(buildCPUUtilizationCell(node), "25.0%") {
+		t.Errorf("cpu cell should still show the request percentage: %q", buildCPUUtilizationCell(node))
+	}
+}

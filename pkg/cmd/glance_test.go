@@ -252,3 +252,34 @@ func TestIsMetricsServerNotAvailable(t *testing.T) {
 		})
 	}
 }
+
+// TestAllNamespacesFlag checks that pods and deployments accept -A and that it
+// selects all namespaces (issue #35).
+func TestAllNamespacesFlag(t *testing.T) {
+	cmd := NewGlanceCmd()
+	for _, sub := range []string{"pods", "deployments"} {
+		c, _, err := cmd.Find([]string{sub})
+		if err != nil {
+			t.Fatalf("subcommand %s not found: %v", sub, err)
+		}
+		if f := c.Flags().ShorthandLookup("A"); f == nil || f.Name != "all-namespaces" {
+			t.Errorf("%s: -A should be the shorthand for --all-namespaces, got %v", sub, f)
+		}
+	}
+
+	gc, err := NewGlanceConfig()
+	if err != nil {
+		t.Fatalf("NewGlanceConfig: %v", err)
+	}
+	if got := resolveNamespace(gc, true); got != "" {
+		t.Errorf("resolveNamespace(all) = %q, want all namespaces", got)
+	}
+	ns := "team-a"
+	gc.configFlags.Namespace = &ns
+	if got := resolveNamespace(gc, false); got != ns {
+		t.Errorf("resolveNamespace(-n %s) = %q", ns, got)
+	}
+	if got := resolveNamespace(gc, true); got != "" {
+		t.Errorf("-A should override -n, got %q", got)
+	}
+}
