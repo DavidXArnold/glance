@@ -251,6 +251,13 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	cmd.PersistentFlags().BoolVar(&showGPU, "show-gpu", false,
 		"Show GPU resource columns. Auto-enabled when GPU nodes are detected.")
 
+	// Extra accelerator resource names for device plugins glance does not
+	// recognize out of the box.
+	var gpuResources []string
+	cmd.PersistentFlags().StringSliceVar(&gpuResources, "gpu-resources", nil,
+		"Additional extended resource names or glob patterns to count as GPUs/accelerators "+
+			"(e.g. example.com/npu,vendor.io/*)")
+
 	// Add --raw and --exact flags (aliases)
 	var showRaw bool
 	var exactValues bool
@@ -270,6 +277,7 @@ func setupGlanceFlags(cmd *cobra.Command, labelSelector, fieldSelector, output *
 	_ = viper.BindPFlag("show-node-age", cmd.PersistentFlags().Lookup("show-node-age"))
 	_ = viper.BindPFlag("show-node-group", cmd.PersistentFlags().Lookup("show-node-group"))
 	_ = viper.BindPFlag("show-gpu", cmd.PersistentFlags().Lookup("show-gpu"))
+	_ = viper.BindPFlag("gpu-resources", cmd.PersistentFlags().Lookup("gpu-resources"))
 	_ = viper.BindPFlag("show-raw", cmd.PersistentFlags().Lookup("raw"))
 	_ = viper.BindPFlag("exact", cmd.PersistentFlags().Lookup("exact"))
 	_ = viper.BindPFlags(cmd.Flags())
@@ -307,6 +315,9 @@ func NewGlanceCmd() *cobra.Command {
 			return nil
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := core.SetExtraGPUResources(viper.GetStringSlice("gpu-resources")); err != nil {
+				return err
+			}
 			return glanceutil.SetupLogger()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {

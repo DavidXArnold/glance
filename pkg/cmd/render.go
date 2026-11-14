@@ -45,41 +45,28 @@ const (
 
 const ctlC = "<C-c>"
 
-// formatQuantity returns a human-readable or exact representation of a quantity pointer.
-func formatQuantity(q *resource.Quantity) string {
+// formatCPUQuantity returns a human-readable or exact representation of a
+// CPU quantity (cores).
+func formatCPUQuantity(q *resource.Quantity) string {
 	if q == nil {
 		return ""
 	}
-
 	if viper.GetBool("exact") || viper.GetBool("show-raw") {
-		// Exact value mode - show the raw value
 		return q.String()
 	}
-
-	// Human-readable mode - determine if CPU or Memory based on scale
-	// CPU values are typically in milli range, memory in bytes
-	if q.MilliValue() < 100000 && q.Value() < 1000000 {
-		// Likely CPU (small millivalue)
-		return formatMilliCPU(q)
-	}
-	// Likely Memory (large byte value)
-	return formatBytes(q)
+	return formatMilliCPU(q)
 }
 
-// formatQuantityValue returns a human-readable or exact representation of a quantity value.
-func formatQuantityValue(q resource.Quantity) string {
+// formatMemoryQuantity returns a human-readable or exact representation of a
+// memory quantity (bytes).
+func formatMemoryQuantity(q *resource.Quantity) string {
+	if q == nil {
+		return ""
+	}
 	if viper.GetBool("exact") || viper.GetBool("show-raw") {
-		// Exact value mode - show the raw value
 		return q.String()
 	}
-
-	// Human-readable mode
-	if q.MilliValue() < 100000 && q.Value() < 1000000 {
-		// Likely CPU
-		return formatMilliCPU(&q)
-	}
-	// Likely Memory
-	return formatBytes(&q)
+	return formatBytes(q)
 }
 
 // formatResourceRatioFromStrings formats resource strings as ratio (used / total).
@@ -306,7 +293,7 @@ func buildNodeRow(
 		buildMemUtilizationCell(v),
 	)
 	if showGPU {
-		row = append(row, buildGPUUtilizationCell(v))
+		row = append(row, formatGPUModel(v), buildGPUUtilizationCell(v))
 	}
 	if showCloud {
 		// Parse provider from ProviderID
@@ -378,8 +365,10 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 	col++
 	colMem := col
 	col++
-	colGPU := 0
+	colGPUModel, colGPU := 0, 0
 	if showGPU {
+		colGPUModel = col
+		col++
 		colGPU = col
 		col++
 	}
@@ -419,7 +408,10 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 		pt.ColumnConfig{Number: colMem, AutoMerge: false},
 	)
 	if colGPU != 0 {
-		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colGPU, AutoMerge: false})
+		baseColumns = append(baseColumns,
+			pt.ColumnConfig{Number: colGPUModel, AutoMerge: false},
+			pt.ColumnConfig{Number: colGPU, AutoMerge: false},
+		)
 	}
 
 	if showCloud {
@@ -450,7 +442,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 		"MEMORY UTILIZATION",
 	)
 	if showGPU {
-		headerRow = append(headerRow, "GPU UTILIZATION")
+		headerRow = append(headerRow, headerGPUModel, "GPU UTILIZATION")
 	}
 	if showCloud {
 		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
@@ -515,7 +507,7 @@ func renderPretty(nm *core.NodeMap, c *core.Totals) error {
 		buildTotalMemCell(c),
 	)
 	if showGPU {
-		footerRow = append(footerRow, buildTotalGPUCell(c))
+		footerRow = append(footerRow, "", buildTotalGPUCell(c))
 	}
 	if showCloud {
 		footerRow = append(footerRow, "", "", "", "")
@@ -623,16 +615,16 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 	cpuUsageBar := buildColoredProgressBarDynamic(cpuUsagePct, barWidth)
 	cpuLine := fmt.Sprintf("║  CPU Usage:      %s %5.1f%%  (%s / %s)",
 		cpuUsageBar, cpuUsagePct,
-		formatQuantity(c.TotalUsageCPU),
-		formatQuantity(c.TotalAllocatableCPU))
+		formatCPUQuantity(c.TotalUsageCPU),
+		formatCPUQuantity(c.TotalAllocatableCPU))
 	fmt.Println(padRightDynamic(cpuLine, boxWidth) + "║")
 
 	// CPU Allocated
 	cpuAllocBar := buildColoredProgressBarDynamic(cpuAllocPct, barWidth)
 	cpuAllocLine := fmt.Sprintf("║  CPU Allocated:  %s %5.1f%%  (%s / %s)",
 		cpuAllocBar, cpuAllocPct,
-		formatQuantity(c.TotalAllocatedCPUrequests),
-		formatQuantity(c.TotalAllocatableCPU))
+		formatCPUQuantity(c.TotalAllocatedCPUrequests),
+		formatCPUQuantity(c.TotalAllocatableCPU))
 	fmt.Println(padRightDynamic(cpuAllocLine, boxWidth) + "║")
 
 	fmt.Println("║" + strings.Repeat(" ", boxWidth) + "║")
@@ -641,16 +633,16 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 	memUsageBar := buildColoredProgressBarDynamic(memUsagePct, barWidth)
 	memLine := fmt.Sprintf("║  Mem Usage:      %s %5.1f%%  (%s / %s)",
 		memUsageBar, memUsagePct,
-		formatQuantity(c.TotalUsageMemory),
-		formatQuantity(c.TotalAllocatableMemory))
+		formatMemoryQuantity(c.TotalUsageMemory),
+		formatMemoryQuantity(c.TotalAllocatableMemory))
 	fmt.Println(padRightDynamic(memLine, boxWidth) + "║")
 
 	// Memory Allocated
 	memAllocBar := buildColoredProgressBarDynamic(memAllocPct, barWidth)
 	memAllocLine := fmt.Sprintf("║  Mem Allocated:  %s %5.1f%%  (%s / %s)",
 		memAllocBar, memAllocPct,
-		formatQuantity(c.TotalAllocatedMemoryRequests),
-		formatQuantity(c.TotalAllocatableMemory))
+		formatMemoryQuantity(c.TotalAllocatedMemoryRequests),
+		formatMemoryQuantity(c.TotalAllocatableMemory))
 	fmt.Println(padRightDynamic(memAllocLine, boxWidth) + "║")
 
 	// GPU Allocated (only shown when GPUs are present in the cluster)
@@ -667,6 +659,7 @@ func printClusterSummary(nm *NodeMap, c *Totals) {
 			c.TotalAllocatedGPURequests.Value(),
 			c.TotalAllocatableGPU.Value())
 		fmt.Println(padRightDynamic(gpuAllocLine, boxWidth) + "║")
+		printGPUGroupLines(c.GPUGroups, boxWidth)
 	}
 
 	fmt.Println(boxStyle.Sprint(botBorder))
@@ -760,8 +753,8 @@ func buildCPUUtilizationCell(v *NodeStats) string {
 
 	return fmt.Sprintf("%s %5.1f%% %s\nReq: %s  Limit: %s",
 		bar, usagePct, spark,
-		formatQuantityValue(v.AllocatedCPUrequests),
-		formatQuantityValue(v.AllocatedCPULimits))
+		formatCPUQuantity(&v.AllocatedCPUrequests),
+		formatCPUQuantity(&v.AllocatedCPULimits))
 }
 
 // buildGPUUtilizationCell creates a GPU utilization cell showing requested / allocatable.
@@ -776,6 +769,11 @@ func buildGPUUtilizationCell(v *NodeStats) string {
 
 	bar := buildMiniProgressBar(pct, 12)
 
+	// With several accelerator types (e.g. full GPUs and MIG slices) the
+	// summed count mixes units, so list each type on its own line.
+	if len(v.Accelerators) > 1 {
+		return fmt.Sprintf("%s %5.1f%%\n%s", bar, pct, formatAcceleratorRatios(v.Accelerators, "\n"))
+	}
 	return fmt.Sprintf("%s %5.1f%%\nReq: %d / %d",
 		bar, pct, req, alloc)
 }
@@ -798,8 +796,8 @@ func buildMemUtilizationCell(v *NodeStats) string {
 
 	return fmt.Sprintf("%s %5.1f%% %s\nReq: %s  Lim: %s",
 		bar, usagePct, spark,
-		formatQuantityValue(v.AllocatedMemoryRequests),
-		formatQuantityValue(v.AllocatedMemoryLimits))
+		formatMemoryQuantity(&v.AllocatedMemoryRequests),
+		formatMemoryQuantity(&v.AllocatedMemoryLimits))
 }
 
 // buildMiniProgressBar creates a compact colored progress bar
@@ -837,8 +835,8 @@ func buildTotalCPUCell(c *core.Totals) string {
 
 	return fmt.Sprintf("Usage: %5.1f%%  Req: %5.1f%%\n%s / %s",
 		usagePct, reqPct,
-		formatQuantity(c.TotalUsageCPU),
-		formatQuantity(c.TotalAllocatableCPU))
+		formatCPUQuantity(c.TotalUsageCPU),
+		formatCPUQuantity(c.TotalAllocatableCPU))
 }
 
 // buildTotalGPUCell creates the totals GPU cell.
@@ -849,10 +847,61 @@ func buildTotalGPUCell(c *core.Totals) string {
 	reqPct := float64(c.TotalAllocatedGPURequests.Value()) /
 		float64(c.TotalAllocatableGPU.Value()) * 100
 
+	if len(c.Accelerators) > 1 {
+		return fmt.Sprintf("Req: %5.1f%%\n%s", reqPct, formatAcceleratorRatios(c.Accelerators, "\n"))
+	}
 	return fmt.Sprintf("Req: %5.1f%%\n%d / %d",
 		reqPct,
 		c.TotalAllocatedGPURequests.Value(),
 		c.TotalAllocatableGPU.Value())
+}
+
+// formatGPUModel returns the node's GPU model for display, or "" for nodes
+// without accelerators. Memory is appended when the model name lacks it.
+func formatGPUModel(v *core.NodeStats) string {
+	if len(v.Accelerators) == 0 {
+		return ""
+	}
+	model := v.GPUModel
+	if model == "" {
+		return core.UnknownGPUModel
+	}
+	if v.GPUMemoryMiB > 0 && !strings.Contains(strings.ToUpper(model), "GB") {
+		model = fmt.Sprintf("%s (%s)", model, formatMiB(v.GPUMemoryMiB))
+	}
+	return model
+}
+
+// formatMiB formats a size in MiB as Gi when it is a whole number of GiB.
+func formatMiB(mib int64) string {
+	if mib%1024 == 0 {
+		return fmt.Sprintf("%dGi", mib/1024)
+	}
+	return fmt.Sprintf("%dMi", mib)
+}
+
+// formatAcceleratorRatios renders requested / allocatable per accelerator
+// type. A single type renders as "3 / 8"; several types render as
+// "1 / 1 gpu" entries joined by sep. It returns "" when there is nothing to show.
+func formatAcceleratorRatios(acc core.AcceleratorMap, sep string) string {
+	var parts []string
+	var only *core.AcceleratorStats
+	for _, name := range acc.Names() {
+		a := acc[name]
+		if a.Allocatable == 0 && a.Requests == 0 {
+			continue
+		}
+		only = a
+		parts = append(parts, fmt.Sprintf("%d / %d %s", a.Requests, a.Allocatable, core.ShortAcceleratorName(name)))
+	}
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("%d / %d", only.Requests, only.Allocatable)
+	default:
+		return strings.Join(parts, sep)
+	}
 }
 
 // buildTotalMemCell creates the totals memory cell
@@ -862,8 +911,8 @@ func buildTotalMemCell(c *core.Totals) string {
 
 	return fmt.Sprintf("Usage: %5.1f%%  Req: %5.1f%%\n%s / %s",
 		usagePct, reqPct,
-		formatQuantity(c.TotalUsageMemory),
-		formatQuantity(c.TotalAllocatableMemory))
+		formatMemoryQuantity(c.TotalUsageMemory),
+		formatMemoryQuantity(c.TotalAllocatableMemory))
 }
 
 // calculatePercentage calculates percentage from two quantities
@@ -985,23 +1034,22 @@ func buildTableRow(name string, v *core.NodeStats, showVersion, showAge, showGro
 	}
 
 	row = append(row,
-		formatQuantityValue(v.AllocatedCPUrequests),
-		formatQuantityValue(v.AllocatedCPULimits),
-		formatQuantity(v.UsageCPU),
+		formatCPUQuantity(&v.AllocatedCPUrequests),
+		formatCPUQuantity(&v.AllocatedCPULimits),
+		formatCPUQuantity(v.UsageCPU),
 		cpuPct,
-		formatQuantityValue(v.AllocatedMemoryRequests),
-		formatQuantityValue(v.AllocatedMemoryLimits),
-		formatQuantity(v.UsageMemory),
+		formatMemoryQuantity(&v.AllocatedMemoryRequests),
+		formatMemoryQuantity(&v.AllocatedMemoryLimits),
+		formatMemoryQuantity(v.UsageMemory),
 		memPct,
 	)
 
 	if showGPU {
-		gpuReq := fmt.Sprintf("%d", v.AllocatedGPURequests.Value())
-		gpuAlloc := "0"
-		if v.AllocatableGPU != nil {
-			gpuAlloc = fmt.Sprintf("%d", v.AllocatableGPU.Value())
+		gpu := formatAcceleratorRatios(v.Accelerators, ", ")
+		if gpu == "" {
+			gpu = "0 / 0"
 		}
-		row = append(row, gpuReq+" / "+gpuAlloc)
+		row = append(row, formatGPUModel(v), gpu)
 	}
 
 	if showCloud {
@@ -1045,23 +1093,21 @@ func buildTableFooter(c *core.Totals, numNodes int, showVersion, showAge, showGr
 		footerRow = append(footerRow, "")
 	}
 	footerRow = append(footerRow,
-		formatQuantity(c.TotalAllocatedCPUrequests),
-		formatQuantity(c.TotalAllocatedCPULimits),
-		formatQuantity(c.TotalUsageCPU),
+		formatCPUQuantity(c.TotalAllocatedCPUrequests),
+		formatCPUQuantity(c.TotalAllocatedCPULimits),
+		formatCPUQuantity(c.TotalUsageCPU),
 		totalCPUPct,
-		formatQuantity(c.TotalAllocatedMemoryRequests),
-		formatQuantity(c.TotalAllocatedMemoryLimits),
-		formatQuantity(c.TotalUsageMemory),
+		formatMemoryQuantity(c.TotalAllocatedMemoryRequests),
+		formatMemoryQuantity(c.TotalAllocatedMemoryLimits),
+		formatMemoryQuantity(c.TotalUsageMemory),
 		totalMemPct,
 	)
 	if showGPU {
-		gpuTotal := "0 / 0"
-		if c.TotalAllocatableGPU != nil && !c.TotalAllocatableGPU.IsZero() {
-			gpuTotal = fmt.Sprintf("%d / %d",
-				c.TotalAllocatedGPURequests.Value(),
-				c.TotalAllocatableGPU.Value())
+		gpuTotal := formatAcceleratorRatios(c.Accelerators, ", ")
+		if gpuTotal == "" {
+			gpuTotal = "0 / 0"
 		}
-		footerRow = append(footerRow, gpuTotal)
+		footerRow = append(footerRow, "", gpuTotal)
 	}
 	if showCloud {
 		footerRow = append(footerRow, "", "", "", "")
@@ -1156,8 +1202,10 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	col++
 	colMemPct := col
 	col++
-	colGPU := 0
+	colGPUModel, colGPU := 0, 0
 	if showGPU {
+		colGPUModel = col
+		col++
 		colGPU = col
 		col++
 	}
@@ -1201,7 +1249,10 @@ func table(nm *core.NodeMap, c *core.Totals) {
 		pt.ColumnConfig{Number: colMemPct, Align: text.AlignRight}, // Mem %
 	)
 	if colGPU != 0 {
-		baseColumns = append(baseColumns, pt.ColumnConfig{Number: colGPU, Align: text.AlignRight}) // GPU
+		baseColumns = append(baseColumns,
+			pt.ColumnConfig{Number: colGPUModel, Align: text.AlignLeft}, // GPU model
+			pt.ColumnConfig{Number: colGPU, Align: text.AlignRight},     // GPU
+		)
 	}
 
 	if showCloud {
@@ -1229,7 +1280,7 @@ func table(nm *core.NodeMap, c *core.Totals) {
 		"MEM REQ", "MEM LIM", "MEM USE", "MEM %",
 	)
 	if showGPU {
-		headerRow = append(headerRow, "GPU REQ/ALLOC")
+		headerRow = append(headerRow, headerGPUModel, "GPU REQ/ALLOC")
 	}
 	if showCloud {
 		headerRow = append(headerRow, "PROVIDER", "REGION", "INSTANCE TYPE", "CAPACITY")
@@ -1256,10 +1307,10 @@ func table(nm *core.NodeMap, c *core.Totals) {
 	fmt.Println(strings.Repeat("-", 60))
 	fmt.Println("  CLUSTER CAPACITY")
 	fmt.Println(strings.Repeat("-", 60))
-	fmt.Printf("  Allocatable CPU:    %s\n", formatQuantity(c.TotalAllocatableCPU))
-	fmt.Printf("  Allocatable Memory: %s\n", formatQuantity(c.TotalAllocatableMemory))
-	fmt.Printf("  Total Capacity CPU: %s\n", formatQuantity(c.TotalCapacityCPU))
-	fmt.Printf("  Total Capacity Mem: %s\n", formatQuantity(c.TotalCapacityMemory))
+	fmt.Printf("  Allocatable CPU:    %s\n", formatCPUQuantity(c.TotalAllocatableCPU))
+	fmt.Printf("  Allocatable Memory: %s\n", formatMemoryQuantity(c.TotalAllocatableMemory))
+	fmt.Printf("  Total Capacity CPU: %s\n", formatCPUQuantity(c.TotalCapacityCPU))
+	fmt.Printf("  Total Capacity Mem: %s\n", formatMemoryQuantity(c.TotalCapacityMemory))
 	if c.TotalAllocatableGPU != nil && !c.TotalAllocatableGPU.IsZero() {
 		fmt.Printf("  Allocatable GPU:    %d\n", c.TotalAllocatableGPU.Value())
 		fmt.Printf("  Allocated GPU:      %d\n", c.TotalAllocatedGPURequests.Value())
@@ -1352,5 +1403,36 @@ func pie(nm *core.NodeMap) error {
 		case "q", ctlC:
 			return nil
 		}
+	}
+}
+
+// printGPUGroupLines prints one summary-box line per GPU model and
+// accelerator type, e.g. "NVIDIA-A100-SXM4-80GB gpu: 6 / 8 (75.0%)". It is
+// skipped when there is a single group with no known model, since the
+// "GPU Allocated" line already says everything.
+func printGPUGroupLines(groups []core.GPUGroup, boxWidth int) {
+	if len(groups) == 0 || (len(groups) == 1 && groups[0].Model == core.UnknownGPUModel) {
+		return
+	}
+	for i := range groups {
+		g := &groups[i]
+		pct := 0.0
+		if g.Allocatable > 0 {
+			pct = float64(g.Requests) / float64(g.Allocatable) * 100
+		}
+		counts := fmt.Sprintf(": %d / %d (%.1f%%), %d free",
+			g.Requests, g.Allocatable, pct, g.Free())
+		label := g.Model + " " + core.ShortAcceleratorName(g.Resource)
+
+		// Truncate the label so the line never pushes the box border out.
+		const prefix = "║    "
+		room := boxWidth + 1 - text.RuneWidthWithoutEscSequences(prefix+counts)
+		if text.RuneWidthWithoutEscSequences(label) > room {
+			if room < 2 {
+				room = 2
+			}
+			label = string([]rune(label)[:room-1]) + "…"
+		}
+		fmt.Println(padRightDynamic(prefix+label+counts, boxWidth) + "║")
 	}
 }

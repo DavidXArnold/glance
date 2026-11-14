@@ -282,25 +282,3 @@ func TestComputeNodeSnapshot_NoGPU(t *testing.T) {
 		t.Errorf("expected total allocatable GPU 0, got %d", totals.TotalAllocatableGPU.Value())
 	}
 }
-
-func TestIsGPUResource(t *testing.T) {
-	tests := []struct {
-		name     v1.ResourceName
-		expected bool
-	}{
-		{ResourceNvidiaGPU, true},
-		{ResourceAMDGPU, true},
-		{"intel.com/gpu", true},
-		{"custom.vendor/gpu", true},
-		{v1.ResourceCPU, false},
-		{v1.ResourceMemory, false},
-		{"nvidia.com/mig-1g.5gb", false},
-	}
-
-	for _, tc := range tests {
-		got := IsGPUResource(tc.name)
-		if got != tc.expected {
-			t.Errorf("IsGPUResource(%q) = %v, want %v", tc.name, got, tc.expected)
-		}
-	}
-}

@@ -358,3 +358,44 @@ func TestCollectStats_FieldSelector(t *testing.T) {
 		assertListRestrictions(t, client, "deployments")
 	})
 }
+
+// TestCollectStats_InitContainers checks pod and deployment rows use the
+// scheduler's effective requests, so a GPU init container that needs more
+// than the app container is counted (max(2, 1) = 2 GPUs).
+func TestCollectStats_InitContainers(t *testing.T) {
+	gpus := func(n int64) v1.ResourceRequirements {
+		list := v1.ResourceList{core.ResourceNvidiaGPU: *resource.NewQuantity(n, resource.DecimalSI)}
+		return v1.ResourceRequirements{Requests: list, Limits: list}
+	}
+	spec := v1.PodSpec{
+		InitContainers: []v1.Container{{Name: "warmup", Resources: gpus(2)}},
+		Containers:     []v1.Container{{Name: "serve", Resources: gpus(1)}},
+	}
+	replicas := int32(3)
+	client := fake.NewSimpleClientset(
+		&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}, Spec: spec},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "d", Namespace: "default"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Template: v1.PodTemplateSpec{Spec: spec},
+			},
+		},
+	)
+
+	pods, err := CollectPodStats(context.Background(), client, nil, "default", nil, nil)
+	if err != nil || len(pods) != 1 {
+		t.Fatalf("CollectPodStats() = %v, %v", pods, err)
+	}
+	if got := pods[0].GPUReq.Value(); got != 2 {
+		t.Errorf("pod GPU requests = %d, want 2", got)
+	}
+
+	deploys, err := CollectDeploymentStats(context.Background(), client, "default", nil, nil)
+	if err != nil || len(deploys) != 1 {
+		t.Fatalf("CollectDeploymentStats() = %v, %v", deploys, err)
+	}
+	if got := deploys[0].GPUReq.Value(); got != 6 {
+		t.Errorf("deployment GPU requests = %d, want 6 (2 x 3 replicas)", got)
+	}
+}

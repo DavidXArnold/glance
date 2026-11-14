@@ -21,7 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/spf13/viper"
+	core "gitlab.com/davidxarnold/glance/pkg/core"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -389,4 +391,133 @@ func TestPrettyStaticNodeColumnVisibility(t *testing.T) {
 			t.Fatalf("expected GROUP column in pretty output when show-node-group=true")
 		}
 	})
+}
+
+func TestFormatAcceleratorRatios(t *testing.T) {
+	tests := []struct {
+		name string
+		acc  core.AcceleratorMap
+		want string
+	}{
+		{name: "none", want: ""},
+		{
+			name: "single type",
+			acc:  core.AcceleratorMap{core.ResourceNvidiaGPU: {Allocatable: 8, Requests: 3}},
+			want: "3 / 8",
+		},
+		{
+			name: "mixed MIG",
+			acc: core.AcceleratorMap{
+				core.ResourceNvidiaGPU:   {Allocatable: 1, Requests: 1},
+				"nvidia.com/mig-1g.10gb": {Allocatable: 7, Requests: 3},
+			},
+			want: "1 / 1 gpu, 3 / 7 mig-1g.10gb",
+		},
+		{
+			name: "empty types skipped",
+			acc: core.AcceleratorMap{
+				core.ResourceNvidiaGPU:       {Allocatable: 4, Requests: 2},
+				core.ResourceNvidiaGPUShared: {},
+			},
+			want: "2 / 4",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatAcceleratorRatios(tt.acc, ", "); got != tt.want {
+				t.Errorf("formatAcceleratorRatios() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatGPUModel(t *testing.T) {
+	gpus := core.AcceleratorMap{core.ResourceNvidiaGPU: {Allocatable: 1}}
+	tests := []struct {
+		name  string
+		stats core.NodeStats
+		want  string
+	}{
+		{name: "no accelerators", stats: core.NodeStats{GPUModel: "ignored"}, want: ""},
+		{name: "unknown model", stats: core.NodeStats{Accelerators: gpus}, want: core.UnknownGPUModel},
+		{
+			name:  "model with memory in name",
+			stats: core.NodeStats{Accelerators: gpus, GPUModel: "NVIDIA-A100-SXM4-80GB", GPUMemoryMiB: 81920},
+			want:  "NVIDIA-A100-SXM4-80GB",
+		},
+		{
+			name:  "model without memory in name",
+			stats: core.NodeStats{Accelerators: gpus, GPUModel: "nvidia-a10g", GPUMemoryMiB: 24576},
+			want:  "nvidia-a10g (24Gi)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatGPUModel(&tt.stats); got != tt.want {
+				t.Errorf("formatGPUModel() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrintGPUGroupLines(t *testing.T) {
+	const boxWidth = 60
+	groups := []core.GPUGroup{
+		{
+			Model:            "NVIDIA-A100-SXM4-80GB",
+			Resource:         core.ResourceNvidiaGPU,
+			AcceleratorStats: core.AcceleratorStats{Allocatable: 8, Requests: 6},
+		},
+		{
+			Model:            "an-extremely-long-accelerator-model-name-that-cannot-fit",
+			Resource:         "nvidia.com/mig-1g.10gb",
+			AcceleratorStats: core.AcceleratorStats{Allocatable: 7, Requests: 3},
+		},
+	}
+
+	out := captureOutput(func() { printGPUGroupLines(groups, boxWidth) })
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d:\n%s", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "NVIDIA-A100-SXM4-80GB gpu: 6 / 8 (75.0%), 2 free") {
+		t.Errorf("unexpected first line: %q", lines[0])
+	}
+	for _, line := range lines {
+		// Every line must end exactly at the box border.
+		if w := text.RuneWidthWithoutEscSequences(line); w != boxWidth+2 {
+			t.Errorf("line width = %d, want %d: %q", w, boxWidth+2, line)
+		}
+	}
+	if !strings.Contains(lines[1], "…") {
+		t.Errorf("expected long label to be truncated: %q", lines[1])
+	}
+
+	// A single unlabelled group adds nothing beyond the "GPU Allocated" line.
+	out = captureOutput(func() {
+		printGPUGroupLines([]core.GPUGroup{{Model: core.UnknownGPUModel, Resource: core.ResourceNvidiaGPU}}, boxWidth)
+	})
+	if out != "" {
+		t.Errorf("expected no output for a single unknown group, got %q", out)
+	}
+}
+
+// TestFormatCPUAndMemoryQuantity guards against guessing the resource type
+// from magnitude, which formatted clusters with 100+ cores as bytes ("128B").
+func TestFormatCPUAndMemoryQuantity(t *testing.T) {
+	viper.Set("exact", false)
+	viper.Set("show-raw", false)
+
+	if got := formatCPUQuantity(resource.NewMilliQuantity(128000, resource.DecimalSI)); got != "128.0" {
+		t.Errorf("formatCPUQuantity(128 cores) = %q, want %q", got, "128.0")
+	}
+	if got := formatCPUQuantity(resource.NewMilliQuantity(250, resource.DecimalSI)); got != "250m" {
+		t.Errorf("formatCPUQuantity(250m) = %q, want %q", got, "250m")
+	}
+	if got := formatMemoryQuantity(resource.NewQuantity(512*1024, resource.BinarySI)); !strings.HasSuffix(got, "Ki") {
+		t.Errorf("formatMemoryQuantity(512Ki) = %q, want a Ki value", got)
+	}
+	if got := formatCPUQuantity(nil); got != "" {
+		t.Errorf("formatCPUQuantity(nil) = %q, want empty", got)
+	}
 }

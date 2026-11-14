@@ -1121,30 +1121,15 @@ func processNamespacePods(
 	gpuLimit := resource.NewQuantity(0, resource.DecimalSI)
 
 	for _, pod := range pods {
-		for _, container := range pod.Spec.Containers {
-			if req := container.Resources.Requests.Cpu(); req != nil {
-				cpuReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Cpu(); lim != nil {
-				cpuLimit.Add(*lim)
-			}
-			if req := container.Resources.Requests.Memory(); req != nil {
-				memReq.Add(*req)
-			}
-			if lim := container.Resources.Limits.Memory(); lim != nil {
-				memLimit.Add(*lim)
-			}
-			for rName, qty := range container.Resources.Requests {
-				if core.IsGPUResource(rName) {
-					gpuReq.Add(qty)
-				}
-			}
-			for rName, qty := range container.Resources.Limits {
-				if core.IsGPUResource(rName) {
-					gpuLimit.Add(qty)
-				}
-			}
-		}
+		// Effective requests/limits as the scheduler computes them (init
+		// containers, sidecars, overhead and pod-level resources included).
+		r := effectivePodResources(&pod)
+		cpuReq.Add(r.cpuReq)
+		cpuLimit.Add(r.cpuLimit)
+		memReq.Add(r.memReq)
+		memLimit.Add(r.memLimit)
+		gpuReq.Add(r.gpuReq)
+		gpuLimit.Add(r.gpuLimit)
 
 		key := pod.Namespace + "/" + pod.Name
 		if pm, ok := metricsByPod[key]; ok {
@@ -1382,7 +1367,7 @@ func buildNodeHeader(state *LiveState) []string {
 	)
 
 	if state.showGPU {
-		header = append(header, "GPU REQ/ALLOC")
+		header = append(header, "GPU REQ/ALLOC", headerGPUModel)
 	}
 
 	if state.showCloudInfo {
@@ -1513,16 +1498,11 @@ func processNodeRow(
 
 	// GPU columns (only when toggled on)
 	if state.showGPU {
-		gpuReq := stats.AllocatedGPURequests.Value()
-		gpuAlloc := int64(0)
-		if stats.AllocatableGPU != nil {
-			gpuAlloc = stats.AllocatableGPU.Value()
+		gpu := formatAcceleratorRatios(stats.Accelerators, ", ")
+		if gpu == "" {
+			gpu = "—"
 		}
-		if gpuAlloc > 0 {
-			row = append(row, fmt.Sprintf("%d / %d", gpuReq, gpuAlloc))
-		} else {
-			row = append(row, "—")
-		}
+		row = append(row, gpu, formatGPUModel(stats))
 	}
 
 	metrics := ResourceMetrics{

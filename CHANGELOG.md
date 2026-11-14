@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- GPU MODEL column in node views (static and live) when GPU columns are shown, read from `nvidia.com/gpu.product` (NVIDIA GPU Feature Discovery), `cloud.google.com/gke-accelerator` (GKE), or `karpenter.k8s.aws/instance-gpu-name` (Karpenter) node labels (#48).
+- The `-o pretty` cluster summary breaks GPU allocation down by model and accelerator type, including free devices (#48).
+- `--gpu-resources` flag and `gpu-resources` config key to count additional device-plugin resources (names or glob patterns) as accelerators (#47).
+- JSON output includes per-type accelerator counts (`Accelerators`), the node's `GPUModel`/`GPUMemoryMiB`, and cluster `GPUGroups`.
+
+### Fixed
+- More accelerator types are now counted as GPUs instead of showing 0: NVIDIA MIG slices (`nvidia.com/mig-*`), shared GPUs (`nvidia.com/gpu.shared`), Intel (`gpu.intel.com/i915`, `gpu.intel.com/xe`), AWS Neuron, Habana Gaudi, and Google TPU (#47).
+- Nodes exposing several accelerator types (e.g. full GPUs and MIG slices) show counts per type instead of one summed number that mixed units (#47).
+- CPU totals of 100 cores or more were displayed as bytes (e.g. `128B`) in the static summary, footers, and capacity sections; CPU and memory are now formatted by type rather than guessed from magnitude.
+- Resource requests and limits now follow the scheduler's rules: init containers, restartable sidecar containers, pod overhead, and pod-level resources are included, so CPU, memory, and GPU allocation match `kubectl describe node` (#34).
+
 ## [0.3.2] - 2026-10-25
 
 ### Fixed
