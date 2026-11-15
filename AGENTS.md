@@ -102,6 +102,7 @@ make build-all      # Build for all platforms (darwin, linux, windows)
 - Run `make test` before committing
 - Use table-driven tests where appropriate
 - Mock Kubernetes clients for unit tests
+- Large-cluster performance: `make bench` (no cluster needed) and `make scale-up NODES=… PODS_PER_NODE=…` / `make scale-down` (KWOK in the current kube context, see `hack/scale-test.sh`). Compare live mode before/after with the API server's `apiserver_request_total` LIST counts and the glance process's CPU/RSS.
 
 ## Release Process
 

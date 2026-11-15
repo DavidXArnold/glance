@@ -150,7 +150,7 @@ func TestComputeNodeSnapshot_PerTypeAccelerators(t *testing.T) {
 	}
 
 	podsByNode := map[string][]v1.Pod{"mig-node": pods}
-	nm, totals, err := ComputeNodeSnapshot([]v1.Node{node}, podsByNode, nil, NodeSnapshotOptions{})
+	nm, totals, err := ComputeNodeSnapshot([]v1.Node{node}, podPtrsByNode(podsByNode), nil, NodeSnapshotOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestComputeNodeSnapshot_InitContainersAndOverhead(t *testing.T) {
 		},
 	}
 
-	nm, _, err := ComputeNodeSnapshot([]v1.Node{node}, map[string][]v1.Pod{"node-1": pods}, nil, NodeSnapshotOptions{})
+	nm, _, err := ComputeNodeSnapshot([]v1.Node{node}, podPtrsByNode(map[string][]v1.Pod{"node-1": pods}), nil, NodeSnapshotOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,4 +244,52 @@ func TestShortAcceleratorName(t *testing.T) {
 			t.Errorf("ShortAcceleratorName(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// TestPodResourceMemo checks that memoized pod resources follow pod changes
+// (a new resourceVersion) and that sweeping drops pods no longer seen.
+func TestPodResourceMemo(t *testing.T) {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{UID: "memo-uid", ResourceVersion: "1"},
+		Spec: v1.PodSpec{Containers: []v1.Container{{
+			Resources: v1.ResourceRequirements{Requests: v1.ResourceList{v1.ResourceCPU: resource.MustParse("100m")}},
+		}}},
+	}
+	if got := requestedMilliCPU(pod); got != 100 {
+		t.Fatalf("requests = %dm, want 100m", got)
+	}
+
+	// Same version: served from the memo even if the object changed in place.
+	pod.Spec.Containers[0].Resources.Requests[v1.ResourceCPU] = resource.MustParse("300m")
+	if got := requestedMilliCPU(pod); got != 100 {
+		t.Errorf("same resourceVersion: requests = %dm, want the memoized 100m", got)
+	}
+	// New version: recomputed.
+	pod.ResourceVersion = "2"
+	if got := requestedMilliCPU(pod); got != 300 {
+		t.Errorf("new resourceVersion: requests = %dm, want 300m", got)
+	}
+
+	// Pods without a UID bypass the memo.
+	anon := pod.DeepCopy()
+	anon.UID = ""
+	anon.Spec.Containers[0].Resources.Requests[v1.ResourceCPU] = resource.MustParse("700m")
+	if got := requestedMilliCPU(anon); got != 700 {
+		t.Errorf("no UID: requests = %dm, want 700m", got)
+	}
+
+	// Used since the last sweep: kept. Unused for a whole sweep cycle: dropped.
+	SweepPodResourceCache()
+	if _, ok := podResourceMemo.entries["memo-uid"]; !ok {
+		t.Fatal("entry used in this cycle was swept")
+	}
+	SweepPodResourceCache()
+	if _, ok := podResourceMemo.entries["memo-uid"]; ok {
+		t.Error("entry unused for a cycle was not swept")
+	}
+}
+
+func requestedMilliCPU(pod *v1.Pod) int64 {
+	reqs := PodRequests(pod)
+	return reqs.Cpu().MilliValue()
 }

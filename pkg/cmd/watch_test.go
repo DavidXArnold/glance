@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -60,9 +61,11 @@ func syntheticCluster(numNodes, podsPerNode, numNamespaces int) []runtime.Object
 			}
 			objs = append(objs, &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("pod-%05d-%03d", n, p),
-					Namespace: fmt.Sprintf("ns-%03d", (n*podsPerNode+p)%numNamespaces),
-					Labels:    map[string]string{"app": fmt.Sprintf("app-%d", p%10)},
+					UID:             types.UID(fmt.Sprintf("uid-%05d-%03d", n, p)),
+					ResourceVersion: "1",
+					Name:            fmt.Sprintf("pod-%05d-%03d", n, p),
+					Namespace:       fmt.Sprintf("ns-%03d", (n*podsPerNode+p)%numNamespaces),
+					Labels:          map[string]string{"app": fmt.Sprintf("app-%d", p%10)},
 					Annotations: map[string]string{
 						lastAppliedAnnotation: `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"x"}}`,
 					},
@@ -97,10 +100,10 @@ func startedCache(t testing.TB, objs ...runtime.Object) *WatchCache {
 	return wc
 }
 
-func podNames(pods []v1.Pod) []string {
+func podNames(pods []*v1.Pod) []string {
 	names := make([]string, len(pods))
-	for i := range pods {
-		names[i] = pods[i].Namespace + "/" + pods[i].Name
+	for i, p := range pods {
+		names[i] = p.Namespace + "/" + p.Name
 	}
 	sort.Strings(names)
 	return names
@@ -354,5 +357,47 @@ func TestWatchCacheForbiddenWatchFallsBack(t *testing.T) {
 	pods, err := wc.ListPods(context.Background(), "default", nil, nil)
 	if err != nil || len(pods) != 2 {
 		t.Fatalf("ListPods after fallback = %d pods, %v; want 2", len(pods), err)
+	}
+}
+
+// benchLiveState returns live state backed by a synced cache of a synthetic
+// cluster, with no metrics.
+func benchLiveState(b *testing.B, numNodes, podsPerNode int) *LiveState {
+	b.Helper()
+	wc := startedCache(b, syntheticCluster(numNodes, podsPerNode, 50)...)
+	return &LiveState{
+		lister:        wc,
+		metrics:       newMetricsCache(metricsfake.NewSimpleClientset(), defaultMetricsMinInterval),
+		maxConcurrent: defaultMaxConcurrent,
+		nodeLimit:     defaultNodeLimit,
+		podLimit:      defaultPodLimit,
+		sortMode:      SortByStatus,
+		showBars:      true,
+	}
+}
+
+// BenchmarkLiveRefresh measures one live refresh per view against a synced
+// cache of 1,000 nodes and 30,000 pods: the CPU glance spends per tick.
+func BenchmarkLiveRefresh(b *testing.B) {
+	state := benchLiveState(b, 1000, 30)
+	ctx := context.Background()
+	views := []struct {
+		name  string
+		fetch func() error
+	}{
+		{"nodes", func() error { _, _, _, err := fetchNodeData(ctx, state); return err }},
+		{"namespaces", func() error { _, _, _, err := fetchNamespaceData(ctx, state); return err }},
+		{"pods-all", func() error { _, _, _, err := fetchPodData(ctx, "", state); return err }},
+		{"gpus", func() error { _, _, err := fetchGPUData(ctx, state.lister); return err }},
+	}
+	for _, v := range views {
+		b.Run(v.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if err := v.fetch(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

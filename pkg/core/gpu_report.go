@@ -110,7 +110,7 @@ type GPUReport struct {
 // BuildGPUReport analyzes nodes and pods for accelerator allocation. pods
 // should include pending (unscheduled) pods and exclude terminated ones.
 // Nodes without accelerators are left out. It makes no API calls.
-func BuildGPUReport(nodes []v1.Node, pods []v1.Pod, now time.Time) GPUReport {
+func BuildGPUReport(nodes []v1.Node, pods []*v1.Pod, now time.Time) GPUReport {
 	report := GPUReport{
 		Nodes:    []GPUNodeReport{},
 		Pools:    []GPUPool{},
@@ -120,8 +120,7 @@ func BuildGPUReport(nodes []v1.Node, pods []v1.Pod, now time.Time) GPUReport {
 
 	podsByNode := make(map[string][]*v1.Pod)
 	var unscheduled []*v1.Pod
-	for i := range pods {
-		pod := &pods[i]
+	for _, pod := range pods {
 		if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
 			continue
 		}

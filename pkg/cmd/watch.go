@@ -42,7 +42,8 @@ type clusterLister interface {
 	ListNodes(ctx context.Context, label labels.Selector, field fields.Selector) ([]v1.Node, error)
 	// ListPods returns pods in namespace ("" for all namespaces) matching the
 	// selectors (nil matches everything).
-	ListPods(ctx context.Context, namespace string, label labels.Selector, field fields.Selector) ([]v1.Pod, error)
+	// The pods may be shared with the cache: callers must not modify them.
+	ListPods(ctx context.Context, namespace string, label labels.Selector, field fields.Selector) ([]*v1.Pod, error)
 	// ListNamespaces returns namespace names in sorted order.
 	ListNamespaces(ctx context.Context) ([]string, error)
 }
@@ -65,12 +66,21 @@ func (a apiLister) ListNodes(ctx context.Context, label labels.Selector, field f
 
 func (a apiLister) ListPods(
 	ctx context.Context, namespace string, label labels.Selector, field fields.Selector,
-) ([]v1.Pod, error) {
+) ([]*v1.Pod, error) {
 	pods, err := a.client.CoreV1().Pods(namespace).List(ctx, buildListOptions(label, field))
 	if err != nil {
 		return nil, err
 	}
-	return pods.Items, nil
+	return podPointers(pods.Items), nil
+}
+
+// podPointers returns pointers to the elements of pods.
+func podPointers(pods []v1.Pod) []*v1.Pod {
+	out := make([]*v1.Pod, len(pods))
+	for i := range pods {
+		out[i] = &pods[i]
+	}
+	return out
 }
 
 func (a apiLister) ListNamespaces(ctx context.Context) ([]string, error) {
@@ -193,7 +203,7 @@ func (wc *WatchCache) ListNodes(ctx context.Context, label labels.Selector, fiel
 // ListPods implements clusterLister.
 func (wc *WatchCache) ListPods(
 	ctx context.Context, namespace string, label labels.Selector, field fields.Selector,
-) ([]v1.Pod, error) {
+) ([]*v1.Pod, error) {
 	if !wc.usable() {
 		return wc.fallback.ListPods(ctx, namespace, label, field)
 	}
@@ -208,14 +218,16 @@ func (wc *WatchCache) ListPods(
 	if err != nil {
 		return nil, err
 	}
-	// Shallow copies: callers only read pods, and copying the structs is far
-	// cheaper than decoding them from an API response.
-	matchAll := field == nil || field.Empty()
+	// The cached objects are returned as is, without copying; callers only
+	// read them.
+	if field == nil || field.Empty() {
+		return cached, nil
+	}
 	set := make(fields.Set, 10) // reused: Matches only reads it
-	result := make([]v1.Pod, 0, len(cached))
+	result := cached[:0:0]
 	for _, p := range cached {
-		if matchAll || field.Matches(podFieldSet(p, set)) {
-			result = append(result, *p)
+		if field.Matches(podFieldSet(p, set)) {
+			result = append(result, p)
 		}
 	}
 	return result, nil

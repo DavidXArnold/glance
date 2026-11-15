@@ -913,16 +913,39 @@ rules:
   list once: nodes, all non-terminated pods, and metrics, each in a single call served from
   the API server's watch cache (`resourceVersion=0`).
 
-Measured client-side cost of the per-refresh pod list on a synthetic 1,000-node,
-30,000-pod cluster (`go test ./pkg/cmd -bench BenchmarkLivePodRefresh`):
+- **Per-refresh work only for what is shown**: pods are read straight from the cache
+  without copying, each pod's effective requests and limits are computed once per pod
+  version rather than every refresh, and the Pods view formats only the rows it displays.
 
-| | Time per refresh | Allocated | Response size |
-|---|---|---|---|
-| List from the API (before) | ~200 ms | ~290 MB | ~16 MiB of JSON |
-| Watch cache | ~11 ms | ~39 MB | none |
+Measured with `make scale-up NODES=1000 PODS_PER_NODE=20` (KWOK on k3s; 1,000 nodes,
+18,200 pods), live Nodes view, 60 seconds at the default 2-second refresh:
 
-Real pods are several times larger than the synthetic ones, and the API server no longer
-serializes the full list every refresh, so the savings on a real cluster are larger.
+| | v0.4.2 | v0.4.3 |
+|---|---|---|
+| glance CPU time | 14.8 s | 2.0 s |
+| glance memory (RSS) | 498 MiB | 281 MiB |
+| Pod lists sent to the API server | 31 | 1 |
+| Node lists sent to the API server | 33 | 2 |
+
+The static commands list once, so their cost is one pod list: about 0.6-0.9 s and
+300-400 MiB peak at that size, mostly reading and decoding the response (the same as
+`kubectl get pods -A`).
+
+### Testing at scale locally
+
+`hack/scale-test.sh` (or `make scale-up` / `make scale-down`) simulates a large cluster
+with [KWOK](https://kwok.sigs.k8s.io) in your current kube context: it installs the KWOK
+controller if needed and creates fake nodes (5% with 8 GPUs) and Deployments whose pods
+KWOK marks Running. No containers run, so thousands of nodes fit on a laptop; usage
+metrics stay empty for fake nodes. Everything it creates is labeled
+`glance-scale-test=true`, and `scale-down` deletes exactly that.
+
+```shell
+make scale-up NODES=1000 PODS_PER_NODE=20   # ~18k pods; needs ~1 GB free for the datastore
+kubectl glance live
+make scale-down
+make bench                                  # per-refresh benchmarks, no cluster needed
+```
 
 ### Large Cluster Detection
 
@@ -1001,6 +1024,7 @@ glance/
 │   │   ├── provider.go # Provider registry and lookup
 │   │   └── types.go    # Provider-agnostic Metadata type
 │   └── util/           # Utility functions (logging, helpers)
+├── hack/scale-test.sh  # KWOK large-cluster simulation (make scale-up / scale-down)
 ├── plugins/krew/       # Krew plugin manifest
 └── version/            # Version information
 ```

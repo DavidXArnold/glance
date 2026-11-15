@@ -605,6 +605,8 @@ func updateDisplay(ctx context.Context, k8sClient kubernetes.Interface, state *L
 	termWidth, termHeight := ui.TerminalDimensions()
 
 	header, data, metrics, err := fetchViewData(ctx, k8sClient, state)
+	// Forget memoized resources of pods that are gone.
+	core.SweepPodResourceCache()
 	if err != nil {
 		return err
 	}
@@ -1020,9 +1022,9 @@ func fetchNamespaceData(
 	}
 
 	// Group pods by namespace
-	podsByNS := make(map[string][]v1.Pod)
-	for i := range allPods {
-		podsByNS[allPods[i].Namespace] = append(podsByNS[allPods[i].Namespace], allPods[i])
+	podsByNS := make(map[string][]*v1.Pod)
+	for _, pod := range allPods {
+		podsByNS[pod.Namespace] = append(podsByNS[pod.Namespace], pod)
 	}
 
 	// Group metrics by namespace+pod
@@ -1095,7 +1097,7 @@ func fetchNamespaceData(
 // processNamespacePods aggregates resource usage for all pods in a single namespace.
 func processNamespacePods(
 	nsName string,
-	pods []v1.Pod,
+	pods []*v1.Pod,
 	metricsByPod map[string]*metricsV1beta1api.PodMetrics,
 	state *LiveState,
 ) nsRowData {
@@ -1111,7 +1113,7 @@ func processNamespacePods(
 	for _, pod := range pods {
 		// Effective requests/limits as the scheduler computes them (init
 		// containers, sidecars, overhead and pod-level resources included).
-		r := effectivePodResources(&pod)
+		r := effectivePodResources(pod)
 		cpuReq.Add(r.cpuReq)
 		cpuLimit.Add(r.cpuLimit)
 		memReq.Add(r.memReq)
@@ -1169,8 +1171,7 @@ func processNamespacePods(
 
 // podRowData holds data for a single pod row for sorting and limiting.
 type podRowData struct {
-	row       []string
-	metrics   ResourceMetrics
+	summary   *PodSummaryRow
 	isRunning bool
 	cpuUsage  float64
 	memUsage  float64
@@ -1209,73 +1210,22 @@ func fetchPodData(
 
 	state.totalPods = len(podSummaries)
 
-	podData := make([]podRowData, 0, len(podSummaries))
-	for _, ps := range podSummaries {
-		cpuReq := ps.CPUReq
-		cpuLimit := ps.CPULimit
-		memReq := ps.MemReq
-		memLimit := ps.MemLimit
-		cpuUsage := ps.CPUUsage
-		memUsage := ps.MemUsage
-
-		// Format status with icon
-		podStatus := ps.Status
-		statusIcon := getStatusIcon(podStatus)
-		isRunning := podStatus == string(v1.PodRunning)
-
-		cpuUsagePct := float64(0)
-		if cpuLimit != nil && cpuLimit.MilliValue() > 0 {
-			cpuUsagePct = float64(cpuUsage.MilliValue()) / float64(cpuLimit.MilliValue()) * 100
+	// Sort on cheap keys first, then format only the rows that are shown:
+	// formatting every pod dominated this view's cost on large clusters.
+	podData := make([]podRowData, len(podSummaries))
+	for i := range podSummaries {
+		ps := &podSummaries[i]
+		podData[i] = podRowData{
+			summary:   ps,
+			isRunning: ps.Status == string(v1.PodRunning),
+			cpuUsage:  usagePercent(ps.CPUUsage.MilliValue(), ps.CPULimit.MilliValue()),
+			memUsage:  usagePercent(ps.MemUsage.Value(), ps.MemLimit.Value()),
 		}
-		memUsagePct := float64(0)
-		if memLimit != nil && memLimit.Value() > 0 {
-			memUsagePct = float64(memUsage.Value()) / float64(memLimit.Value()) * 100
-		}
-
-		row := []string{
-			ps.Name,
-			formatResourceRatio(cpuReq, cpuLimit, false, state.showRawResources),
-			formatResourceRatio(cpuUsage, cpuLimit, false, state.showRawResources),
-			formatResourceRatio(memReq, memLimit, true, state.showRawResources),
-			formatResourceRatio(memUsage, memLimit, true, state.showRawResources),
-		}
-		if state.showGPU {
-			if ps.GPUReq != nil && ps.GPUReq.Value() > 0 {
-				gpuLimVal := int64(0)
-				if ps.GPULimit != nil {
-					gpuLimVal = ps.GPULimit.Value()
-				}
-				row = append(row, fmt.Sprintf("%d / %d", ps.GPUReq.Value(), gpuLimVal))
-			} else {
-				row = append(row, "—")
-			}
-		}
-		row = append(row, statusIcon+podStatus)
-
-		metrics := ResourceMetrics{
-			CPURequest:  float64(cpuReq.MilliValue()) / 1000.0,
-			CPULimit:    float64(cpuLimit.MilliValue()) / 1000.0,
-			CPUUsage:    float64(cpuUsage.MilliValue()) / 1000.0,
-			CPUCapacity: float64(cpuLimit.MilliValue()) / 1000.0,
-			MemRequest:  float64(memReq.Value()),
-			MemLimit:    float64(memLimit.Value()),
-			MemUsage:    float64(memUsage.Value()),
-			MemCapacity: float64(memLimit.Value()),
-		}
-
-		podData = append(podData, podRowData{
-			row:       row,
-			metrics:   metrics,
-			isRunning: isRunning,
-			cpuUsage:  cpuUsagePct,
-			memUsage:  memUsagePct,
-		})
 	}
 
-	// Sort based on sort mode
 	// Status sort puts non-running pods (Pending, Failed, etc.) first.
 	sortRowsByMode(podData, state.sortMode, func(p *podRowData) rowSortKey {
-		return rowSortKey{healthy: p.isRunning, name: p.row[0], cpu: p.cpuUsage, mem: p.memUsage}
+		return rowSortKey{healthy: p.isRunning, name: p.summary.Name, cpu: p.cpuUsage, mem: p.memUsage}
 	})
 
 	// Apply pod limit
@@ -1284,12 +1234,12 @@ func fetchPodData(
 		limit = state.podLimit
 	}
 
-	// Build final rows and metrics
 	rows := make([][]string, 0, limit)
 	metrics := make([]ResourceMetrics, 0, limit)
 	for i := 0; i < limit; i++ {
-		rows = append(rows, podData[i].row)
-		metrics = append(metrics, podData[i].metrics)
+		row, m := formatPodRow(podData[i].summary, state)
+		rows = append(rows, row)
+		metrics = append(metrics, m)
 	}
 
 	return header, rows, metrics, nil
@@ -1660,10 +1610,10 @@ func fetchNodeData(
 	}
 
 	// Group pods by node name (O(n) instead of O(n*m) API calls)
-	podsByNode := make(map[string][]v1.Pod)
-	for i := range allPods {
-		if nodeName := allPods[i].Spec.NodeName; nodeName != "" {
-			podsByNode[nodeName] = append(podsByNode[nodeName], allPods[i])
+	podsByNode := make(map[string][]*v1.Pod, len(nodes))
+	for _, pod := range allPods {
+		if nodeName := pod.Spec.NodeName; nodeName != "" {
+			podsByNode[nodeName] = append(podsByNode[nodeName], pod)
 		}
 	}
 
@@ -2650,4 +2600,48 @@ func startWatchCache(ctx context.Context, gc *GlanceConfig) (*WatchCache, error)
 		return nil, fmt.Errorf("watch cache unavailable: %w", err)
 	}
 	return wc, nil
+}
+
+// usagePercent returns used as a percentage of limit, or 0 without a limit.
+func usagePercent(used, limit int64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	return float64(used) / float64(limit) * 100
+}
+
+// formatPodRow formats one pod's row and bar metrics for the live Pods view.
+func formatPodRow(ps *PodSummaryRow, state *LiveState) ([]string, ResourceMetrics) {
+	raw := state.showRawResources
+	row := []string{
+		ps.Name,
+		formatResourceRatio(ps.CPUReq, ps.CPULimit, false, raw),
+		formatResourceRatio(ps.CPUUsage, ps.CPULimit, false, raw),
+		formatResourceRatio(ps.MemReq, ps.MemLimit, true, raw),
+		formatResourceRatio(ps.MemUsage, ps.MemLimit, true, raw),
+	}
+	if state.showGPU {
+		if ps.GPUReq != nil && ps.GPUReq.Value() > 0 {
+			gpuLimVal := int64(0)
+			if ps.GPULimit != nil {
+				gpuLimVal = ps.GPULimit.Value()
+			}
+			row = append(row, fmt.Sprintf("%d / %d", ps.GPUReq.Value(), gpuLimVal))
+		} else {
+			row = append(row, "—")
+		}
+	}
+	row = append(row, getStatusIcon(ps.Status)+ps.Status)
+
+	metrics := ResourceMetrics{
+		CPURequest:  float64(ps.CPUReq.MilliValue()) / 1000.0,
+		CPULimit:    float64(ps.CPULimit.MilliValue()) / 1000.0,
+		CPUUsage:    float64(ps.CPUUsage.MilliValue()) / 1000.0,
+		CPUCapacity: float64(ps.CPULimit.MilliValue()) / 1000.0,
+		MemRequest:  float64(ps.MemReq.Value()),
+		MemLimit:    float64(ps.MemLimit.Value()),
+		MemUsage:    float64(ps.MemUsage.Value()),
+		MemCapacity: float64(ps.MemLimit.Value()),
+	}
+	return row, metrics
 }

@@ -179,4 +179,19 @@ tag-release:
 clean:
 	rm -rf target/
 	
-.PHONY: test version build archive build-all archive-all checksums krew-plugin release krew-reset krew-validate clean
+# Large-cluster simulation with KWOK in the current kube context (see
+# hack/scale-test.sh). Example: make scale-up NODES=1000 PODS_PER_NODE=20
+NODES ?= 1000
+PODS_PER_NODE ?= 30
+NAMESPACES ?= 50
+scale-up:
+	hack/scale-test.sh up $(NODES) $(PODS_PER_NODE) $(NAMESPACES)
+
+scale-down:
+	hack/scale-test.sh down
+
+# Benchmarks for live mode's per-refresh cost (synthetic 1,000 nodes / 30,000 pods).
+bench:
+	go test ./pkg/cmd -run '^$$' -bench 'BenchmarkLive' -benchtime 10x
+
+.PHONY: test version build archive build-all archive-all checksums krew-plugin release krew-reset krew-validate clean scale-up scale-down bench

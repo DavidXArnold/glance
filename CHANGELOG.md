@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `kubectl glance live --watch-cache` (on by default) and `--watch-cache=false` to opt out.
+- `hack/scale-test.sh` and `make scale-up` / `make scale-down` to simulate a large cluster locally with KWOK, and `make bench` for live mode's per-refresh benchmarks.
 
 ### Changed
 - Live mode no longer re-lists every pod in the cluster on each refresh (every 2 seconds by default). It lists nodes, pods and namespaces once at startup and then follows changes over watches; on a synthetic 1,000-node, 30,000-pod cluster this cuts the per-refresh pod-list cost from ~200 ms and a ~16 MiB response to ~11 ms with no API call. If the cache cannot sync within 2 minutes, or watch is not permitted, live mode warns and lists on every refresh as before (#41).
 - Live mode fetches node and pod metrics at most every 10 seconds instead of every refresh; metrics-server only produces new numbers every 15 seconds by default.
+- Live mode's per-refresh work is cheaper on large clusters: pods are read from the cache without copying, each pod's effective requests and limits are computed once per pod version, and the Pods view formats only the rows it shows. Measured on a simulated 1,000-node, 18,200-pod cluster (Nodes view, 60 s): glance CPU 14.8 s → 2.0 s, memory 498 → 281 MiB, pod lists sent to the API server 31 → 1.
+- The static node view reads nodes and pods from the API server's watch cache (`resourceVersion=0`), like the other static commands.
 - Ctrl-C and SIGTERM cancel in-flight API requests, so the static commands no longer hang on a slow or unreachable API server; `--request-timeout` is honored (#39).
 - `--max-concurrent` help text now says what it does: the number of parallel workers building table rows (it never limited API requests).
 

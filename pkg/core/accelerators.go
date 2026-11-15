@@ -23,6 +23,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 	resourcehelper "k8s.io/component-helpers/resource"
 )
 
@@ -169,13 +170,72 @@ func ShortAcceleratorName(name v1.ResourceName) string {
 // restartable sidecar init containers) and the largest init container, plus
 // pod overhead, honoring pod-level resources when set.
 func PodRequests(pod *v1.Pod) v1.ResourceList {
-	return resourcehelper.PodRequests(pod, resourcehelper.PodResourcesOptions{})
+	return podResourceMemo.get(pod).requests
 }
 
 // PodLimits returns the effective resource limits of a pod, computed the
 // same way as PodRequests.
 func PodLimits(pod *v1.Pod) v1.ResourceList {
-	return resourcehelper.PodLimits(pod, resourcehelper.PodResourcesOptions{})
+	return podResourceMemo.get(pod).limits
+}
+
+// podResourceMemo remembers each pod's effective requests and limits by UID
+// and resourceVersion. Computing them walks every container on every call,
+// which dominated live mode's CPU on large clusters; pods rarely change
+// between refreshes. Callers must not modify the returned lists.
+var podResourceMemo = &podResourceCache{entries: map[types.UID]*podResourceEntry{}}
+
+type podResourceEntry struct {
+	resourceVersion string
+	requests        v1.ResourceList
+	limits          v1.ResourceList
+	generation      uint64
+}
+
+type podResourceCache struct {
+	mu         sync.Mutex
+	entries    map[types.UID]*podResourceEntry
+	generation uint64
+}
+
+func computePodResources(pod *v1.Pod) *podResourceEntry {
+	opts := resourcehelper.PodResourcesOptions{}
+	return &podResourceEntry{
+		resourceVersion: pod.ResourceVersion,
+		requests:        resourcehelper.PodRequests(pod, opts),
+		limits:          resourcehelper.PodLimits(pod, opts),
+	}
+}
+
+func (c *podResourceCache) get(pod *v1.Pod) *podResourceEntry {
+	// Objects without identity (test fixtures, pod templates) are not cached.
+	if pod.UID == "" || pod.ResourceVersion == "" {
+		return computePodResources(pod)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[pod.UID]
+	if !ok || e.resourceVersion != pod.ResourceVersion {
+		e = computePodResources(pod)
+		c.entries[pod.UID] = e
+	}
+	e.generation = c.generation
+	return e
+}
+
+// SweepPodResourceCache drops cached pod resources not used since the
+// previous sweep, so deleted pods do not accumulate. Live mode calls it once
+// per refresh.
+func SweepPodResourceCache() {
+	c := podResourceMemo
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for uid, e := range c.entries {
+		if e.generation < c.generation {
+			delete(c.entries, uid)
+		}
+	}
+	c.generation++
 }
 
 // SumAccelerators returns the total accelerator count across all accelerator

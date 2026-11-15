@@ -467,9 +467,11 @@ func GlanceK8s(ctx context.Context, k8sClient *kubernetes.Clientset, gc *GlanceC
 }
 
 func getNodes(ctx context.Context, clientset *kubernetes.Clientset) (nodes *v1.NodeList, err error) {
-	nodes, err = clientset.CoreV1().Nodes().List(ctx,
-		metav1.ListOptions{LabelSelector: viper.GetString("selector"), FieldSelector: viper.GetString("field-selector")},
-	)
+	nodes, err = clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		ResourceVersion: "0",
+		LabelSelector:   viper.GetString("selector"),
+		FieldSelector:   viper.GetString("field-selector"),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -479,17 +481,20 @@ func getNodes(ctx context.Context, clientset *kubernetes.Clientset) (nodes *v1.N
 // buildNonTerminatedPodsByNode fetches all non-terminated pods once and groups
 // them by node name. This mirrors the live path's list+group pattern and
 // avoids per-node pod list calls.
-func buildNonTerminatedPodsByNode(ctx context.Context, clientset *kubernetes.Clientset) (map[string][]v1.Pod, error) {
-	podsByNode := make(map[string][]v1.Pod)
+func buildNonTerminatedPodsByNode(ctx context.Context, clientset *kubernetes.Clientset) (map[string][]*v1.Pod, error) {
+	podsByNode := make(map[string][]*v1.Pod)
 
+	// ResourceVersion "0" is served from the API server's watch cache.
 	podList, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: nonTerminatedPods,
+		ResourceVersion: "0",
+		FieldSelector:   nonTerminatedPods,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	for _, pod := range podList.Items {
+	for i := range podList.Items {
+		pod := &podList.Items[i]
 		if pod.Spec.NodeName == "" {
 			continue
 		}
