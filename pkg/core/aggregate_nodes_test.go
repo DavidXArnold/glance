@@ -65,7 +65,7 @@ func TestComputeNodeSnapshot_SingleReadyNode(t *testing.T) {
 	}
 
 	opts := NodeSnapshotOptions{RequireMetrics: true}
-	nm, totals, err := ComputeNodeSnapshot([]v1.Node{node}, podsByNode, nodeMetrics, opts)
+	nm, totals, err := ComputeNodeSnapshot([]v1.Node{node}, podPtrsByNode(podsByNode), nodeMetrics, opts)
 	if err != nil {
 		t.Fatalf("ComputeNodeSnapshot returned error: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestComputeNodeSnapshot_GPUResources(t *testing.T) {
 	podsByNode := map[string][]v1.Pod{"gpu-node": {pod}}
 
 	opts := NodeSnapshotOptions{RequireMetrics: false}
-	nm, totals, err := ComputeNodeSnapshot([]v1.Node{node}, podsByNode, nil, opts)
+	nm, totals, err := ComputeNodeSnapshot([]v1.Node{node}, podPtrsByNode(podsByNode), nil, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,4 +281,23 @@ func TestComputeNodeSnapshot_NoGPU(t *testing.T) {
 	if totals.TotalAllocatableGPU.Value() != 0 {
 		t.Errorf("expected total allocatable GPU 0, got %d", totals.TotalAllocatableGPU.Value())
 	}
+}
+
+// podPtrs returns pointers to the elements of pods.
+func podPtrs(pods []v1.Pod) []*v1.Pod {
+	out := make([]*v1.Pod, len(pods))
+	for i := range pods {
+		out[i] = &pods[i]
+	}
+	return out
+}
+
+// podPtrsByNode converts a pods-by-node map to the pointer form
+// ComputeNodeSnapshot takes.
+func podPtrsByNode(m map[string][]v1.Pod) map[string][]*v1.Pod {
+	out := make(map[string][]*v1.Pod, len(m))
+	for k, v := range m {
+		out[k] = podPtrs(v)
+	}
+	return out
 }

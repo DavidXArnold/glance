@@ -62,7 +62,7 @@ Allocation is based on pod requests; it does not measure GPU utilization.
 				return fmt.Errorf("failed to create kubernetes client: %w", err)
 			}
 
-			report, err := collectGPUReport(context.Background(), k8sClient)
+			report, err := collectGPUReport(cmd.Context(), apiLister{client: k8sClient})
 			if err != nil {
 				return err
 			}
@@ -73,25 +73,22 @@ Allocation is based on pod requests; it does not measure GPU utilization.
 
 // collectGPUReport lists nodes (filtered by the selector flags) and all
 // non-terminated pods, then builds the GPU report.
-func collectGPUReport(ctx context.Context, k8sClient kubernetes.Interface) (core.GPUReport, error) {
+func collectGPUReport(ctx context.Context, lister clusterLister) (core.GPUReport, error) {
 	labelSelector, fieldSelector, err := getSelectors()
 	if err != nil {
 		return core.GPUReport{}, err
 	}
 
-	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, buildListOptions(labelSelector, fieldSelector))
+	nodes, err := lister.ListNodes(ctx, labelSelector, fieldSelector)
 	if err != nil {
 		return core.GPUReport{}, fmt.Errorf("failed to list nodes: %w", err)
 	}
-	pods, err := k8sClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		ResourceVersion: "0",
-		FieldSelector:   nonTerminatedPods,
-	})
+	pods, err := lister.ListPods(ctx, metav1.NamespaceAll, nil, nonTerminatedPodSelector)
 	if err != nil {
 		return core.GPUReport{}, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	return core.BuildGPUReport(nodes.Items, pods.Items, time.Now()), nil
+	return core.BuildGPUReport(nodes, pods, time.Now()), nil
 }
 
 // gpuFindingTitles maps finding kinds to short human-readable titles.

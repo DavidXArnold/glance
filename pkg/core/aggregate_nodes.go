@@ -24,7 +24,7 @@ type NodeSnapshotOptions struct {
 // responsible for fetching Nodes, Pods, and NodeMetrics.
 func ComputeNodeSnapshot(
 	nodes []v1.Node,
-	podsByNode map[string][]v1.Pod,
+	podsByNode map[string][]*v1.Pod,
 	nodeMetrics map[string]*metricsV1beta1api.NodeMetrics,
 	opts NodeSnapshotOptions,
 ) (NodeMap, Totals, error) {
@@ -143,7 +143,7 @@ func populateNodeResources(stats *NodeStats, node *v1.Node) {
 }
 
 // aggregatePodResources sums CPU, memory, and GPU requests/limits from all pods into stats.
-func aggregatePodResources(stats *NodeStats, pods []v1.Pod) {
+func aggregatePodResources(stats *NodeStats, pods []*v1.Pod) {
 	stats.PodCount = len(pods)
 
 	cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
@@ -156,8 +156,8 @@ func aggregatePodResources(stats *NodeStats, pods []v1.Pod) {
 	for i := range pods {
 		// Use the scheduler's view of the pod so init containers, sidecars,
 		// overhead and pod-level resources are accounted for.
-		reqs := PodRequests(&pods[i])
-		lims := PodLimits(&pods[i])
+		reqs := PodRequests(pods[i])
+		lims := PodLimits(pods[i])
 
 		cpuReq.Add(*reqs.Cpu())
 		cpuLim.Add(*lims.Cpu())

@@ -79,7 +79,7 @@ func TestBuildGPUReport(t *testing.T) {
 		pendingFrag, pendingFits, pendingHuge,
 	}
 
-	r := BuildGPUReport(nodes, pods, now)
+	r := BuildGPUReport(nodes, podPtrs(pods), now)
 
 	t.Run("nodes", func(t *testing.T) { checkReportNodes(t, &r) })
 	t.Run("pools", func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestBuildGPUReport_Fragmentation(t *testing.T) {
 	}
 	pods = append(pods, gpuPod("ml", "needs-2", "", 2))
 
-	r := BuildGPUReport(nodes, pods, time.Now())
+	r := BuildGPUReport(nodes, podPtrs(pods), time.Now())
 
 	if r.Pools[0].Free != 4 || r.Pools[0].LargestFreeBlock != 1 || r.Pools[0].Model != UnknownGPUModel {
 		t.Errorf("pool = %+v, want 4 free, largest block 1, unknown model", r.Pools[0])

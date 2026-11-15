@@ -14,15 +14,23 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"gitlab.com/davidxarnold/glance/pkg/cmd"
 )
 
 func main() {
+	// Ctrl-C or SIGTERM cancels in-flight API requests instead of leaving
+	// the process waiting on a slow or unresponsive API server.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	root := cmd.NewGlanceCmd()
-	if err := root.Execute(); err != nil {
+	err := root.ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		// Print a user-facing error to stderr and exit with non-zero status.
 		// Logging is handled inside the library code via configured logrus.
 		fmt.Fprintln(os.Stderr, err.Error())
