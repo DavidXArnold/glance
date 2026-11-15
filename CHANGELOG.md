@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-15
+
 ### Added
 - `kubectl glance live --watch-cache` (on by default) and `--watch-cache=false` to opt out.
 - `hack/scale-test.sh` and `make scale-up` / `make scale-down` to simulate a large cluster locally with KWOK, and `make bench` for live mode's per-refresh benchmarks.
@@ -329,7 +331,8 @@ Tagged `v0.2.5`; the binary reports version 0.2.4 because `version/version.go` w
 - **Fixed**: Bug fixes
 - **Security**: Security fixes
 
-[Unreleased]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.2...main
+[Unreleased]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.3...main
+[0.4.3]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.2...v0.4.3
 [0.4.2]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.1...v0.4.2
 [0.4.1]: https://gitlab.com/davidxarnold/glance/-/compare/v0.4.0...v0.4.1
 [0.4.0]: https://gitlab.com/davidxarnold/glance/-/compare/v0.3.3...v0.4.0
