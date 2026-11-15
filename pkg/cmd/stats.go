@@ -84,20 +84,26 @@ func CollectPodStats(
 		}
 	}
 
+	return podSummaryRows(pods.Items, podMetricsList), nil
+}
+
+// podSummaryRows builds pod summary rows from pods and their metrics
+// (podMetrics may be nil). The live view calls it with cached pods.
+func podSummaryRows(pods []v1.Pod, podMetrics *metricsv1beta1.PodMetricsList) []PodSummaryRow {
 	// Key by namespace and name: when listing all namespaces, pod names are
 	// not unique (e.g. StatefulSet pods such as redis-0).
 	metricsMap := make(map[types.NamespacedName]*metricsv1beta1.PodMetrics)
-	if podMetricsList != nil {
-		for i := range podMetricsList.Items {
-			pm := &podMetricsList.Items[i]
+	if podMetrics != nil {
+		for i := range podMetrics.Items {
+			pm := &podMetrics.Items[i]
 			metricsMap[types.NamespacedName{Namespace: pm.Namespace, Name: pm.Name}] = pm
 		}
 	}
 
-	rows := make([]PodSummaryRow, 0, len(pods.Items))
+	rows := make([]PodSummaryRow, 0, len(pods))
 
-	for i := range pods.Items {
-		pod := &pods.Items[i]
+	for i := range pods {
+		pod := &pods[i]
 
 		cpuReq := resource.NewMilliQuantity(0, resource.DecimalSI)
 		cpuLimit := resource.NewMilliQuantity(0, resource.DecimalSI)
@@ -145,7 +151,7 @@ func CollectPodStats(
 		rows = append(rows, row)
 	}
 
-	return rows, nil
+	return rows
 }
 
 // CollectDeploymentStats aggregates deployment-level resource stats for a given namespace and optional selectors.

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"sort"
 
@@ -51,7 +50,7 @@ Respects --selector, --field-selector, and --output.`,
 
 			namespace := resolveNamespace(gc, allNamespaces)
 
-			ctx := context.Background()
+			ctx := cmd.Context()
 			rows, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, selector, fieldSelector)
 			if err != nil {
 				return fmt.Errorf("failed to collect pod stats: %w", err)
@@ -106,7 +105,7 @@ Respects --selector, --field-selector, and --output.`,
 
 			namespace := resolveNamespace(gc, allNamespaces)
 
-			ctx := context.Background()
+			ctx := cmd.Context()
 			rows, err := CollectDeploymentStats(ctx, k8sClient, namespace, selector, fieldSelector)
 			if err != nil {
 				return fmt.Errorf("failed to collect deployment stats: %w", err)

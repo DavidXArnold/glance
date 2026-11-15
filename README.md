@@ -22,7 +22,7 @@ A kubectl plugin for viewing Kubernetes cluster resource allocation, utilization
 - ☁️ **Cloud Provider Integration** - Optional AWS/GCP node metadata columns, enabled explicitly via flags or live view toggles
 - 🔍 **Flexible Filtering** - Label and field selectors for targeted views
 - 📏 **Value Display Options** - Human-readable ratios or raw Kubernetes resource values
-- 🛠️ **Performance Optimizations** - Parallel API fetching, watch cache, and batch operations for large clusters
+- 🛠️ **Performance Optimizations** - Live mode watches nodes and pods instead of re-listing them, polls metrics at most every 10s, and static views list once
 
 
 ## Table of Contents
@@ -707,10 +707,12 @@ The pods STATUS column shows the effective state the way `kubectl get pods` does
 | `--node-limit` | | `20` | Maximum number of nodes to display (0 = unlimited) |
 | `--pod-limit` | | `100` | Maximum number of pods to display (0 = unlimited) |
 | `--sort-by` | | `status` | Sort mode: `status`, `name`, `cpu`, `memory` |
-| `--max-concurrent` | | `50` | Maximum concurrent API requests for parallel fetching |
+| `--watch-cache` | | `true` | Watch nodes, pods and namespaces instead of re-listing them every refresh; `false` lists on every refresh |
+| `--max-concurrent` | | `50` | Maximum parallel workers building table rows |
 
 **Notes:**
-- `--node-limit` and `--pod-limit` are useful for large clusters (>100 nodes) to improve performance
+- `--node-limit` and `--pod-limit` keep the table readable on large clusters (>100 nodes); they do not reduce API load
+- Usage metrics are fetched at most every 10 seconds (metrics-server itself refreshes every 15 seconds by default)
 - Sort mode can be changed dynamically in live view using keys `1`–`4`
 - Namespace can be changed interactively using Left/Right arrow keys
 
@@ -862,7 +864,7 @@ kubectl glance --raw -o json | jq '{
 - **Metrics Server**: provides the usage columns. Without it, the node view (`kubectl glance`)
   prints a warning and shows requests, limits and capacity with usage as `n/a`
   (pass `--require-metrics` to fail instead). `kubectl glance gpus`, `pods`, and `deployments`
-  also work without it (pod usage shows as 0), as does live mode.
+  also work without it (pod usage shows as 0), as does live mode (usage shows as 0).
   - Install: `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`
   - Or see the Kubernetes [metrics-server project] or your cloud provider's documentation for managed metrics add-ons
 
@@ -884,7 +886,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["nodes", "pods", "namespaces"]
-  verbs: ["get", "list"]
+  verbs: ["get", "list", "watch"]  # watch: live mode's cache; without it, live lists every refresh
 - apiGroups: ["apps"]
   resources: ["deployments"]
   verbs: ["get", "list"]
@@ -895,23 +897,32 @@ rules:
 
 ## Performance and Scaling
 
-Glance is optimized for large Kubernetes clusters with advanced performance features:
+### How live mode stays cheap on large clusters
 
-### Optimizations
+- **Watch cache** (`--watch-cache`, on by default): live mode lists nodes, pods and
+  namespaces once at startup ("Syncing nodes, pods and namespaces...") and then follows
+  changes over watches. Before v0.4.3 every refresh (every 2 seconds by default) re-listed
+  every pod in the cluster. Cached objects drop fields glance never reads (managed fields,
+  `last-applied-configuration`, container env, command and probes, volumes, node image
+  lists) to keep memory down.
+- **Metrics at most every 10 seconds**: the metrics API cannot be watched, so node and pod
+  metrics are polled, but no more often than metrics-server produces new numbers.
+- **Fallbacks**: if the cache cannot sync within 2 minutes, or your RBAC allows `list` but
+  not `watch`, glance prints a warning and lists on every refresh, as before.
+- **Static commands** (`kubectl glance`, `pods`, `deployments`, `gpus`) run once, so they
+  list once: nodes, all non-terminated pods, and metrics, each in a single call served from
+  the API server's watch cache (`resourceVersion=0`).
 
-- **Parallel API Fetching** - Uses Go errgroup for concurrent node, pod, and namespace queries
-- **Watch Cache** - Leverages Kubernetes API server's watch cache (`resourceVersion="0"`) to reduce etcd load
-- **Batch Operations** - Single pod list call with in-memory grouping eliminates N+1 query problem
-- **Smart Limits** - Configurable node and pod limits prevent display overload in large clusters
+Measured client-side cost of the per-refresh pod list on a synthetic 1,000-node,
+30,000-pod cluster (`go test ./pkg/cmd -bench BenchmarkLivePodRefresh`):
 
-### Performance Characteristics
+| | Time per refresh | Allocated | Response size |
+|---|---|---|---|
+| List from the API (before) | ~200 ms | ~290 MB | ~16 MiB of JSON |
+| Watch cache | ~11 ms | ~39 MB | none |
 
-| Cluster Size | Startup Time | Recommendations |
-|--------------|--------------|-----------------|
-| < 20 nodes | ~1-2 seconds | Default settings work great |
-| 20-100 nodes | ~2-4 seconds | Use default `--node-limit=20` for live view |
-| 100-500 nodes | ~5-10 seconds | Increase `--node-limit` as needed, use `--sort-by` strategically |
-| 500+ nodes | ~10-20 seconds | Use a higher `--max-concurrent` and keep `--node-limit` modest |
+Real pods are several times larger than the synthetic ones, and the API server no longer
+serializes the full list every refresh, so the savings on a real cluster are larger.
 
 ### Large Cluster Detection
 
@@ -929,8 +940,9 @@ raise it with --node-limit or in the settings panel ([?]).
 # Increase display limits for larger terminals
 kubectl glance live --node-limit=50 --pod-limit=200
 
-# Increase API concurrency for faster fetching
-kubectl glance live --max-concurrent=100
+# Re-list on every refresh instead of watching (e.g. to compare, or behind
+# proxies that break long-lived watch connections)
+kubectl glance live --watch-cache=false
 
 # Sort by specific criteria to focus on problem areas
 kubectl glance live --sort-by=cpu  # Show highest CPU usage first
@@ -973,7 +985,9 @@ glance/
 │   │   ├── live.go     # Live TUI implementation
 │   │   ├── stats.go    # Shared pod/deployment aggregation (static + live)
 │   │   ├── render.go   # Output formatting
-│   │   ├── watch.go    # Informer-based cache (not yet wired in, see #41)
+│   │   ├── watch.go    # clusterLister: informer cache (live mode) and direct API lister
+│   │   ├── metrics_cache.go  # Live mode metrics, fetched at most every 10s
+│   │   ├── podstatus.go      # kubectl-style pod STATUS
 │   │   └── types.go    # Thin aliases over core types, shared constants
 │   ├── core/           # Core domain types and aggregation (UI-agnostic)
 │   │   ├── types.go    # NodeStats, Totals, Snapshot, etc.

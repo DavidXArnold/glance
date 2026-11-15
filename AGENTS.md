@@ -22,6 +22,9 @@ High-level layering (current state):
   - `render.go` – output rendering (text, pretty, JSON, charts) consuming `core.Snapshot`/`core.NodeMap`/`core.Totals`. GPU columns in static node/pod/deployment views when `--show-gpu` is enabled.
   - `stats.go` – shared aggregation helpers (`CollectPodStats`, `CollectDeploymentStats`) used by both static and live paths. Scans containers for GPU extended resources via `core.IsGPUResource`.
   - `types.go` – compatibility type aliases that re-export `pkg/core` types for callers importing `pkg/cmd`.
+  - `watch.go` – `clusterLister` interface with two implementations: `WatchCache` (shared informers; used by live mode, strips unused fields, falls back to the API when a watch is forbidden) and `apiLister` (direct List calls; static commands and the `--watch-cache=false` fallback). Live view fetchers read nodes/pods/namespaces only through `state.lister`.
+  - `metrics_cache.go` – `metricsCache`, which live mode uses to fetch node/pod metrics at most every 10s.
+  - Contexts: `cmd/glance.go` runs the root command with a SIGINT/SIGTERM-cancelled context; use `cmd.Context()` in `RunE` and pass it down rather than `context.Background()`.
 - `pkg/util` – shared helpers.
 
 Legacy structure for context:
@@ -57,7 +60,6 @@ glance/
 - `github.com/sirupsen/logrus` - Logging
 - `cloud.google.com/go/container` - GCP integration
 - `github.com/aws/aws-sdk-go-v2` - AWS integration
-- `golang.org/x/sync` - errgroup for parallel API operations
 
 ## Development Commands
 

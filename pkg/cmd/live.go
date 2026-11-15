@@ -16,6 +16,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -29,12 +30,13 @@ import (
 	"gitlab.com/davidxarnold/glance/pkg/cloud"
 	core "gitlab.com/davidxarnold/glance/pkg/core"
 	glanceutil "gitlab.com/davidxarnold/glance/pkg/util"
-	"golang.org/x/sync/errgroup"
 	"gopkg.in/inf.v0"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 )
@@ -106,6 +108,11 @@ type ResourceMetrics struct {
 
 // LiveState holds the state for the live TUI
 type LiveState struct {
+	// lister serves nodes, pods and namespaces (informer cache or API).
+	lister clusterLister
+	// metrics serves node and pod metrics, refetched at most every 10s.
+	metrics *metricsCache
+
 	mode                   ViewMode
 	selectedNamespace      string
 	selectedNamespaceIndex int // For up/down navigation in namespace view
@@ -171,6 +178,7 @@ func NewLiveCmd(gc *GlanceConfig) *cobra.Command {
 	var podLimit int
 	var maxConcurrent int
 	var sortBy string
+	var watchCache bool
 
 	cmd := &cobra.Command{
 		Use:   "live",
@@ -185,6 +193,8 @@ View modes:
   - GPUs ([G]): Shows GPU pools, GPU nodes, pending GPU pods, and wasted-GPU findings
 
 Scaling options:
+  - Nodes, pods and namespaces are watched rather than re-listed on every refresh
+    (--watch-cache, default on); metrics are fetched at most every 10 seconds
   - Use --node-limit to limit displayed nodes (default: 20)
   - Use --pod-limit to limit displayed pods (default: 100)
   - Use --sort-by to sort by status, cpu, memory, or name (default: status)
@@ -229,13 +239,12 @@ Controls will be displayed at the bottom of the screen.`,
 				log.Debugf("Failed to determine namespace: %v", err)
 				namespace = ""
 			}
-			// Respect the kubeconfig context's namespace (or -n), like kubectl.
-			// There is no -A flag yet (#35); press ←→ in live mode to cycle
-			// namespaces, or "n" for the namespaces view.
-			// I'll stick with respecting the resolved namespace.
+			// Respect the kubeconfig context's namespace (or -n), like kubectl;
+			// press ←→ in live mode to cycle namespaces, or "n" for the
+			// namespaces view.
 
-			return runLive(k8sClient, gc, time.Duration(refreshInterval)*time.Second,
-				nodeLimit, podLimit, maxConcurrent, sortMode, namespace)
+			return runLive(cmd.Context(), k8sClient, gc, time.Duration(refreshInterval)*time.Second,
+				nodeLimit, podLimit, maxConcurrent, sortMode, namespace, watchCache)
 		},
 	}
 
@@ -245,20 +254,25 @@ Controls will be displayed at the bottom of the screen.`,
 	cmd.Flags().IntVar(&podLimit, "pod-limit", defaultPodLimit,
 		"Maximum pods to display per view (0 for unlimited)")
 	cmd.Flags().IntVar(&maxConcurrent, "max-concurrent", defaultMaxConcurrent,
-		"Maximum concurrent API requests")
+		"Maximum parallel workers building table rows")
 	cmd.Flags().StringVar(&sortBy, "sort-by", sortByStatus,
 		"Sort by: status, name, cpu, memory")
+	cmd.Flags().BoolVar(&watchCache, "watch-cache", true,
+		"Watch nodes, pods and namespaces instead of re-listing them on every refresh "+
+			"(needs list and watch permission; falls back to listing when unavailable)")
 
 	return cmd
 }
 
 func runLive(
-	k8sClient *kubernetes.Clientset,
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
 	gc *GlanceConfig,
 	refreshInterval time.Duration,
 	nodeLimit, podLimit, maxConcurrent int,
 	sortMode SortMode,
 	initialNamespace string,
+	useWatchCache bool,
 ) error {
 	// Ensure configuration is initialized so that live view honors
 	// settings from ~/.glance/config (e.g., show-node-version, show-node-age,
@@ -268,12 +282,42 @@ func runLive(
 		initConfig()
 	}
 
-	if err := ui.Init(); err != nil {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics client: %w", err)
+	}
+
+	// Sync the cache before the TUI takes over the terminal, so progress and
+	// fallback messages are readable.
+	var lister clusterLister = apiLister{client: k8sClient}
+	if useWatchCache {
+		wc, cacheErr := startWatchCache(ctx, gc)
+		if cacheErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v; listing on every refresh instead\n", cacheErr)
+		} else {
+			defer wc.Stop()
+			lister = wc
+		}
+	}
+
+	// client-go logs through klog to stderr (for example when a watch drops
+	// and reconnects); send it to glance's log instead of over the TUI.
+	klog.LogToStderr(false)
+	klogWriter := log.StandardLogger().WriterLevel(log.DebugLevel)
+	defer func() { _ = klogWriter.Close() }()
+	klog.SetOutput(klogWriter)
+
+	if err = ui.Init(); err != nil {
 		return fmt.Errorf("failed to initialize termui: %w", err)
 	}
 	defer ui.Close()
 
 	state := &LiveState{
+		lister:                 lister,
+		metrics:                newMetricsCache(metricsClient, defaultMetricsMinInterval),
 		mode:                   ViewNodes,
 		selectedNamespace:      initialNamespace,
 		selectedNamespaceIndex: 0,
@@ -303,22 +347,19 @@ func runLive(
 
 	// Check cluster size and warn for large clusters
 	// Also detect if cloud provider is present
-	ctx := context.Background()
-	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-		ResourceVersion: "0", // Use watch cache for faster response
-	})
+	nodes, err := state.lister.ListNodes(ctx, nil, nil)
 	hasCloudProvider := false
 	if err == nil {
-		state.totalNodes = len(nodes.Items)
+		state.totalNodes = len(nodes)
 		if state.totalNodes > largeClusterThreshold {
 			log.Warnf("Large cluster detected (%d nodes). Showing at most %d nodes (--node-limit); "+
 				"raise it with --node-limit or in the settings panel ([?]).",
 				state.totalNodes, nodeLimit)
 		}
 		// Check if any node has a cloud provider ID
-		for _, node := range nodes.Items {
-			if node.Spec.ProviderID != "" {
-				cp, _ := glanceutil.ParseProviderID(node.Spec.ProviderID)
+		for i := range nodes {
+			if providerID := nodes[i].Spec.ProviderID; providerID != "" {
+				cp, _ := glanceutil.ParseProviderID(providerID)
 				if cp == providerAWS || cp == providerGCE {
 					hasCloudProvider = true
 					state.cloudProvider = strings.ToUpper(cp)
@@ -348,7 +389,7 @@ func runLive(
 	state.menuBar.TextStyle = ui.NewStyle(ui.ColorYellow)
 
 	// Initial render
-	if err := updateDisplay(k8sClient, gc, state); err != nil {
+	if err := updateDisplay(ctx, k8sClient, state); err != nil {
 		return err
 	}
 
@@ -359,14 +400,17 @@ func runLive(
 
 	for {
 		select {
+		case <-ctx.Done():
+			return nil
+
 		case e := <-uiEvents:
-			if handleUIEvent(e, k8sClient, gc, state) {
+			if handleUIEvent(ctx, e, k8sClient, state) {
 				return nil
 			}
 
 		case <-ticker.C:
 			state.lastUpdate = time.Now()
-			if err := updateDisplay(k8sClient, gc, state); err != nil {
+			if err := updateDisplay(ctx, k8sClient, state); err != nil {
 				log.Errorf("Failed to update display: %v", err)
 			}
 		}
@@ -383,7 +427,7 @@ var viewModeKeys = map[string]ViewMode{
 	"G": ViewGPUs,
 }
 
-func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) bool {
+func handleUIEvent(ctx context.Context, e ui.Event, k8sClient kubernetes.Interface, state *LiveState) bool {
 	// Handle confirmation dialog first if active
 	if state.showConfirmDiscard {
 		handleConfirmEvent(e, state)
@@ -478,9 +522,9 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 	case "<Enter>":
 		handleEnterKey(state)
 	case "<Left>":
-		handleLeftArrow(k8sClient, state)
+		handleLeftArrow(ctx, state)
 	case "<Right>":
-		handleRightArrow(k8sClient, state)
+		handleRightArrow(ctx, state)
 	case "<Resize>":
 		// Handle terminal resize - update modal if open
 		if state.showSettingsModal {
@@ -489,7 +533,7 @@ func handleUIEvent(e ui.Event, k8sClient *kubernetes.Clientset, gc *GlanceConfig
 		}
 	}
 
-	if err := updateDisplay(k8sClient, gc, state); err != nil {
+	if err := updateDisplay(ctx, k8sClient, state); err != nil {
 		log.Errorf("Failed to update display: %v", err)
 	}
 	return false
@@ -522,46 +566,45 @@ func handleEnterKey(state *LiveState) {
 }
 
 // handleLeftArrow handles left arrow key to cycle to previous namespace.
-func handleLeftArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
+func handleLeftArrow(ctx context.Context, state *LiveState) {
 	if state.mode == ViewPods || state.mode == ViewDeployments {
-		state.selectedNamespace = getPreviousNamespace(k8sClient, state.selectedNamespace)
+		state.selectedNamespace = getPreviousNamespace(ctx, state.lister, state.selectedNamespace)
 	}
 }
 
 // handleRightArrow handles right arrow key to cycle to next namespace.
-func handleRightArrow(k8sClient *kubernetes.Clientset, state *LiveState) {
+func handleRightArrow(ctx context.Context, state *LiveState) {
 	if state.mode == ViewPods || state.mode == ViewDeployments {
-		state.selectedNamespace = getNextNamespace(k8sClient, state.selectedNamespace)
+		state.selectedNamespace = getNextNamespace(ctx, state.lister, state.selectedNamespace)
 	}
 }
 
 // fetchViewData fetches the header, rows, and per-row metrics for the current view.
 func fetchViewData(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	gc *GlanceConfig,
+	k8sClient kubernetes.Interface,
 	state *LiveState,
 ) (header []string, data [][]string, metrics []ResourceMetrics, err error) {
 	switch state.mode {
 	case ViewNamespaces:
-		return fetchNamespaceData(ctx, k8sClient, gc, state)
+		return fetchNamespaceData(ctx, state)
 	case ViewPods:
-		return fetchPodData(ctx, k8sClient, gc, state.selectedNamespace, state)
+		return fetchPodData(ctx, state.selectedNamespace, state)
 	case ViewNodes:
-		return fetchNodeData(ctx, k8sClient, gc, state)
+		return fetchNodeData(ctx, state)
 	case ViewDeployments:
 		return fetchDeploymentData(ctx, k8sClient, state.selectedNamespace)
 	case ViewGPUs:
-		header, data, err = fetchGPUData(ctx, k8sClient)
+		header, data, err = fetchGPUData(ctx, state.lister)
 		return header, data, nil, err
 	}
 	return nil, nil, nil, nil
 }
 
-func updateDisplay(k8sClient *kubernetes.Clientset, gc *GlanceConfig, state *LiveState) error {
+func updateDisplay(ctx context.Context, k8sClient kubernetes.Interface, state *LiveState) error {
 	termWidth, termHeight := ui.TerminalDimensions()
 
-	header, data, metrics, err := fetchViewData(context.Background(), k8sClient, gc, state)
+	header, data, metrics, err := fetchViewData(ctx, k8sClient, state)
 	if err != nil {
 		return err
 	}
@@ -844,7 +887,7 @@ func renderSummaryBar(
 	}
 
 	summary.Text = fmt.Sprintf(
-		" Status: %s %s %s │ CPU: %s %.0f%%%% │ Mem: %s %.0f%%%s%s%s%s%s",
+		" Status: %s %s %s │ CPU: %s %.0f%% │ Mem: %s %.0f%%%s%s%s%s%s",
 		healthIcon, warnIcon, critIcon,
 		cpuBar, stats.AvgCPUUsage,
 		memBar, stats.AvgMemUsage,
@@ -948,8 +991,6 @@ type nsRowData struct {
 
 func fetchNamespaceData(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	gc *GlanceConfig,
 	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
@@ -964,54 +1005,24 @@ func fetchNamespaceData(
 		header = append(header, "GPU REQ/LIMIT")
 	}
 
-	// Use watch cache for faster response
-	namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-		ResourceVersion: "0",
-	})
+	namespaces, err := state.lister.ListNamespaces(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list namespaces: %w", err)
 	}
-
-	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
+	allPods, err := state.lister.ListPods(ctx, metav1.NamespaceAll, nil, nil)
 	if err != nil {
-		return header, [][]string{}, []ResourceMetrics{}, nil
-	}
-
-	// Fetch ALL pods and metrics in parallel (instead of per-namespace queries)
-	g, gCtx := errgroup.WithContext(ctx)
-
-	var allPods *v1.PodList
-	var allPodMetrics *metricsV1beta1api.PodMetricsList
-
-	g.Go(func() error {
-		var err error
-		allPods, err = k8sClient.CoreV1().Pods("").List(gCtx, metav1.ListOptions{
-			ResourceVersion: "0",
-		})
-		return err
-	})
-
-	g.Go(func() error {
-		var err error
-		allPodMetrics, err = metricsClient.MetricsV1beta1().PodMetricses("").List(gCtx, metav1.ListOptions{
-			ResourceVersion: "0",
-		})
-		if err != nil {
-			log.Debugf("Failed to fetch pod metrics: %v", err)
-		}
-		return nil // Don't fail on metrics error
-	})
-
-	if err := g.Wait(); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to fetch pods: %w", err)
+	}
+	// Metrics are best-effort: without them usage shows as zero.
+	allPodMetrics, err := state.metrics.PodMetrics(ctx, metav1.NamespaceAll)
+	if err != nil {
+		log.Debugf("Failed to fetch pod metrics: %v", err)
 	}
 
 	// Group pods by namespace
 	podsByNS := make(map[string][]v1.Pod)
-	if allPods != nil {
-		for _, pod := range allPods.Items {
-			podsByNS[pod.Namespace] = append(podsByNS[pod.Namespace], pod)
-		}
+	for i := range allPods {
+		podsByNS[allPods[i].Namespace] = append(podsByNS[allPods[i].Namespace], allPods[i])
 	}
 
 	// Group metrics by namespace+pod
@@ -1025,19 +1036,19 @@ func fetchNamespaceData(
 	}
 
 	// Process namespaces in parallel
-	nsData := make([]nsRowData, len(namespaces.Items))
+	nsData := make([]nsRowData, len(namespaces))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, state.maxConcurrent)
 
-	for i, ns := range namespaces.Items {
+	for i, ns := range namespaces {
 		wg.Add(1)
-		go func(idx int, ns v1.Namespace) {
+		go func(idx int, ns string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			nsData[idx] = processNamespacePods(
-				ns.Name, podsByNS[ns.Name], metricsByPod, state,
+				ns, podsByNS[ns], metricsByPod, state,
 			)
 		}(i, ns)
 	}
@@ -1167,8 +1178,6 @@ type podRowData struct {
 
 func fetchPodData(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	gc *GlanceConfig,
 	namespace string,
 	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
@@ -1185,18 +1194,18 @@ func fetchPodData(
 		header = append(header[:len(header)-1], "GPU REQ/LIMIT", header[len(header)-1])
 	}
 
-	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
-	if err != nil {
-		// Metrics are best-effort; log and proceed without usage data.
-		log.Debugf("Failed to create metrics client for pods: %v", err)
-		metricsClient = nil
-	}
-
-	// Use shared aggregation helper so that static and live views stay in sync.
-	podSummaries, err := CollectPodStats(ctx, k8sClient, metricsClient, namespace, nil, nil)
+	pods, err := state.lister.ListPods(ctx, namespace, nil, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list pods: %w", err)
 	}
+	// Metrics are best-effort; without them usage shows as zero.
+	podMetrics, err := state.metrics.PodMetrics(ctx, namespace)
+	if err != nil {
+		log.Debugf("Failed to fetch pod metrics for namespace %q: %v", namespace, err)
+	}
+
+	// Shared row builder so that static and live views stay in sync.
+	podSummaries := podSummaryRows(pods, podMetrics)
 
 	state.totalPods = len(podSummaries)
 
@@ -1334,43 +1343,6 @@ func buildNodeHeader(state *LiveState) []string {
 	}
 
 	return header
-}
-
-// fetchNodeMetricsAndPods fetches node metrics and pods in parallel.
-func fetchNodeMetricsAndPods(
-	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	metricsClient *metricsclientset.Clientset,
-) (*metricsV1beta1api.NodeMetricsList, *v1.PodList, error) {
-	g, gCtx := errgroup.WithContext(ctx)
-
-	var nodeMetrics *metricsV1beta1api.NodeMetricsList
-	var allPods *v1.PodList
-
-	// Fetch node metrics in parallel
-	g.Go(func() error {
-		var err error
-		nodeMetrics, err = metricsClient.MetricsV1beta1().NodeMetricses().List(gCtx, metav1.ListOptions{
-			ResourceVersion: "0",
-		})
-		return err
-	})
-
-	// Fetch ALL pods once (instead of per-node queries) using watch cache
-	g.Go(func() error {
-		var err error
-		allPods, err = k8sClient.CoreV1().Pods("").List(gCtx, metav1.ListOptions{
-			ResourceVersion: "0",
-			FieldSelector:   nonTerminatedPods,
-		})
-		return err
-	})
-
-	if err := g.Wait(); err != nil {
-		return nodeMetrics, allPods, err
-	}
-
-	return nodeMetrics, allPods, nil
 }
 
 // processNodeRow builds a single node row with metrics using aggregated
@@ -1556,12 +1528,11 @@ func extractCapacityTypeFromLabels(labels map[string]string) string {
 }
 
 // fetchCloudInfoForNodes fetches cloud provider info for all nodes with caching.
-func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
+func fetchCloudInfoForNodes(ctx context.Context, nodeData []nodeRowData, state *LiveState) {
 	if !viper.GetBool("show-cloud-provider") || !state.showCloudInfo {
 		return
 	}
 
-	ctx := context.Background()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -1658,37 +1629,26 @@ func fetchCloudInfoForNodes(nodeData []nodeRowData, state *LiveState) {
 
 func fetchNodeData(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
-	gc *GlanceConfig,
 	state *LiveState,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := buildNodeHeader(state)
 
-	// Use watch cache for faster response (resourceVersion="0")
-	nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-		ResourceVersion: "0",
-	})
+	nodes, err := state.lister.ListNodes(ctx, nil, nil)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
+	state.totalNodes = len(nodes)
 
-	state.totalNodes = len(nodes.Items)
-
-	metricsClient, err := metricsclientset.NewForConfig(gc.restConfig)
+	allPods, err := state.lister.ListPods(ctx, metav1.NamespaceAll, nil, nonTerminatedPodSelector)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to create metrics client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	// Fetch all data in parallel
-	nodeMetrics, allPods, err := fetchNodeMetricsAndPods(ctx, k8sClient, metricsClient)
+	// Metrics are best-effort: without metrics-server the view still shows
+	// capacity and allocation, with usage empty.
+	nodeMetrics, err := state.metrics.NodeMetrics(ctx)
 	if err != nil {
-		if isMetricsServerNotAvailable(err) {
-			msg := "metrics-server (metrics.k8s.io) is required for glance live to operate. " +
-				"Install the Kubernetes metrics-server add-on or your cloud provider's metrics extension."
-			log.Warnf("%s: %v", msg, err)
-			return nil, nil, nil, fmt.Errorf("%s", msg)
-		}
-		return nil, nil, nil, fmt.Errorf("failed to fetch metrics or pods: %w", err)
+		log.Debugf("Failed to fetch node metrics: %v", err)
 	}
 
 	// Build metrics map
@@ -1701,29 +1661,26 @@ func fetchNodeData(
 
 	// Group pods by node name (O(n) instead of O(n*m) API calls)
 	podsByNode := make(map[string][]v1.Pod)
-	if allPods != nil {
-		for _, pod := range allPods.Items {
-			nodeName := pod.Spec.NodeName
-			if nodeName != "" {
-				podsByNode[nodeName] = append(podsByNode[nodeName], pod)
-			}
+	for i := range allPods {
+		if nodeName := allPods[i].Spec.NodeName; nodeName != "" {
+			podsByNode[nodeName] = append(podsByNode[nodeName], allPods[i])
 		}
 	}
 
 	// Use shared core aggregation to compute NodeStats first.
 	snapshotOpts := core.NodeSnapshotOptions{RequireMetrics: false}
-	nm, _, err := core.ComputeNodeSnapshot(nodes.Items, podsByNode, metricsMap, snapshotOpts)
+	nm, _, err := core.ComputeNodeSnapshot(nodes, podsByNode, metricsMap, snapshotOpts)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to compute node snapshot: %w", err)
 	}
 
 	// Process nodes in parallel with semaphore for concurrency limit
-	nodeData := make([]nodeRowData, len(nodes.Items))
+	nodeData := make([]nodeRowData, len(nodes))
 	var mu sync.Mutex
 	sem := make(chan struct{}, state.maxConcurrent)
 
 	var wg sync.WaitGroup
-	for i, node := range nodes.Items {
+	for i, node := range nodes {
 		wg.Add(1)
 		go func(idx int, node v1.Node) {
 			defer wg.Done()
@@ -1741,7 +1698,7 @@ func fetchNodeData(
 	wg.Wait()
 
 	// Fetch cloud info asynchronously if enabled
-	fetchCloudInfoForNodes(nodeData, state)
+	fetchCloudInfoForNodes(ctx, nodeData, state)
 
 	// Apply filters
 	nodeData = filterNodeData(nodeData, state)
@@ -1845,7 +1802,7 @@ func sortRowsByMode[T any](data []T, mode SortMode, key func(*T) rowSortKey) {
 
 func fetchDeploymentData(
 	ctx context.Context,
-	k8sClient *kubernetes.Clientset,
+	k8sClient kubernetes.Interface,
 	namespace string,
 ) ([]string, [][]string, []ResourceMetrics, error) {
 	header := []string{
@@ -1925,53 +1882,28 @@ func getModeString(mode ViewMode) string {
 	}
 }
 
-func getPreviousNamespace(k8sClient *kubernetes.Clientset, current string) string {
-	ctx := context.Background()
-	namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
-	if err != nil || len(namespaces.Items) == 0 {
-		return current
-	}
-
-	names := make([]string, 0, len(namespaces.Items))
-	for _, ns := range namespaces.Items {
-		names = append(names, ns.Name)
-	}
-	sort.Strings(names)
-
-	for i, name := range names {
-		if name == current {
-			if i == 0 {
-				return names[len(names)-1]
-			}
-			return names[i-1]
-		}
-	}
-
-	return names[0]
+// getPreviousNamespace returns the namespace before current in sorted order,
+// wrapping around.
+func getPreviousNamespace(ctx context.Context, lister clusterLister, current string) string {
+	return adjacentNamespace(ctx, lister, current, -1)
 }
 
-func getNextNamespace(k8sClient *kubernetes.Clientset, current string) string {
-	ctx := context.Background()
-	namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
-	if err != nil || len(namespaces.Items) == 0 {
+// getNextNamespace returns the namespace after current in sorted order,
+// wrapping around.
+func getNextNamespace(ctx context.Context, lister clusterLister, current string) string {
+	return adjacentNamespace(ctx, lister, current, 1)
+}
+
+func adjacentNamespace(ctx context.Context, lister clusterLister, current string, step int) string {
+	names, err := lister.ListNamespaces(ctx)
+	if err != nil || len(names) == 0 {
 		return current
 	}
-
-	names := make([]string, 0, len(namespaces.Items))
-	for _, ns := range namespaces.Items {
-		names = append(names, ns.Name)
-	}
-	sort.Strings(names)
-
 	for i, name := range names {
 		if name == current {
-			if i == len(names)-1 {
-				return names[0]
-			}
-			return names[i+1]
+			return names[(i+step+len(names))%len(names)]
 		}
 	}
-
 	return names[0]
 }
 
@@ -2632,10 +2564,10 @@ func handleConfirmEvent(e ui.Event, state *LiveState) {
 // fetchGPUData builds the live GPU view: one row per GPU pool (model and
 // accelerator type), one per GPU node, and one per pending GPU pod, followed
 // by findings, separated by blank rows.
-func fetchGPUData(ctx context.Context, k8sClient kubernetes.Interface) ([]string, [][]string, error) {
+func fetchGPUData(ctx context.Context, lister clusterLister) ([]string, [][]string, error) {
 	header := []string{"NAME", headerGPUModel, "STATE", "GPU REQ/ALLOC", headerFree, "GPU PODS", "OTHER PODS"}
 
-	report, err := collectGPUReport(ctx, k8sClient)
+	report, err := collectGPUReport(ctx, lister)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2697,4 +2629,25 @@ func fetchGPUData(ctx context.Context, k8sClient kubernetes.Interface) ([]string
 		}
 	}
 	return header, data, nil
+}
+
+// watchCacheSyncTimeout bounds the initial cache sync. Listing every pod in a
+// very large cluster can take a while; past this, fall back to listing.
+const watchCacheSyncTimeout = 2 * time.Minute
+
+// startWatchCache starts an informer cache for live mode. It uses a client
+// without --request-timeout, which would otherwise cut every watch short.
+func startWatchCache(ctx context.Context, gc *GlanceConfig) (*WatchCache, error) {
+	cfg := rest.CopyConfig(gc.restConfig)
+	cfg.Timeout = 0
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create watch client: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "Syncing nodes, pods and namespaces...")
+	wc := NewWatchCache(client)
+	if err := wc.Start(ctx, watchCacheSyncTimeout); err != nil {
+		return nil, fmt.Errorf("watch cache unavailable: %w", err)
+	}
+	return wc, nil
 }

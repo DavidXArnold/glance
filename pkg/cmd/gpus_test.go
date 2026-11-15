@@ -55,7 +55,7 @@ func TestCollectAndRenderGPUReport(t *testing.T) {
 		gpuTestPod("train", "", 2),
 	)
 
-	report, err := collectGPUReport(context.Background(), client)
+	report, err := collectGPUReport(context.Background(), apiLister{client: client})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestFetchGPUData(t *testing.T) {
 		gpuTestPod("train", "", 2),
 	)
 
-	header, data, err := fetchGPUData(context.Background(), client)
+	header, data, err := fetchGPUData(context.Background(), apiLister{client: client})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestFetchGPUData(t *testing.T) {
 }
 
 func TestFetchGPUData_NoGPUs(t *testing.T) {
-	_, data, err := fetchGPUData(context.Background(), fake.NewSimpleClientset())
+	_, data, err := fetchGPUData(context.Background(), apiLister{client: fake.NewSimpleClientset()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

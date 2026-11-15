@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `kubectl glance live --watch-cache` (on by default) and `--watch-cache=false` to opt out.
+
+### Changed
+- Live mode no longer re-lists every pod in the cluster on each refresh (every 2 seconds by default). It lists nodes, pods and namespaces once at startup and then follows changes over watches; on a synthetic 1,000-node, 30,000-pod cluster this cuts the per-refresh pod-list cost from ~200 ms and a ~16 MiB response to ~11 ms with no API call. If the cache cannot sync within 2 minutes, or watch is not permitted, live mode warns and lists on every refresh as before (#41).
+- Live mode fetches node and pod metrics at most every 10 seconds instead of every refresh; metrics-server only produces new numbers every 15 seconds by default.
+- Ctrl-C and SIGTERM cancel in-flight API requests, so the static commands no longer hang on a slow or unreachable API server; `--request-timeout` is honored (#39).
+- `--max-concurrent` help text now says what it does: the number of parallel workers building table rows (it never limited API requests).
+
+### Fixed
+- Live mode exited at startup without metrics-server; it now shows capacity and allocation with usage as 0, as the README already said.
+- The live summary bar showed CPU usage as `2%%`.
+
+### Removed
+- Unused code: the never-set `pods` option's per-pod metrics path (`getPodsInfo`) and the `KubernetesConfigFlags` global (#41).
+
 ## [0.4.2] - 2026-11-14
 
 ### Added

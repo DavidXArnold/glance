@@ -35,7 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
-	metricsapi "k8s.io/metrics/pkg/apis/metrics"
 	metricsV1beta1api "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 
@@ -52,9 +51,8 @@ const (
 )
 
 var (
-	cfgFile               string
-	configPath            string
-	KubernetesConfigFlags *genericclioptions.ConfigFlags
+	cfgFile    string
+	configPath string
 )
 
 // initConfig reads in config file and ENV variables if set.
@@ -298,10 +296,7 @@ func NewGlanceCmd() *cobra.Command {
 		fieldSelector string
 		output        string
 		cloudInfo     bool
-		// pods          bool
 	)
-
-	KubernetesConfigFlags = genericclioptions.NewConfigFlags(false)
 
 	gc, err := NewGlanceConfig()
 	if err != nil {
@@ -349,7 +344,7 @@ func NewGlanceCmd() *cobra.Command {
 
 			// Errors are printed once by the entrypoint (cmd/glance.go), which
 			// writes to stderr even when logs are redirected to a file.
-			return GlanceK8s(k8sClient, gc)
+			return GlanceK8s(cmd.Context(), k8sClient, gc)
 		},
 	}
 
@@ -377,8 +372,7 @@ func NewGlanceCmd() *cobra.Command {
 // GlanceK8s displays cluster information for a given clientset
 // GlanceK8s performs the core glance operation on a Kubernetes cluster.
 // nolint gocyclo
-func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
-	ctx := context.Background()
+func GlanceK8s(ctx context.Context, k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 
 	nodes, err := getNodes(ctx, k8sClient)
 	if err != nil {
@@ -454,27 +448,6 @@ func GlanceK8s(k8sClient *kubernetes.Clientset, gc *GlanceConfig) (err error) {
 		log.Debug("GPU resources detected, auto-enabling --show-gpu")
 	}
 
-	// If requested, enrich with pod-level details (reusing existing helper).
-	labelSelector, _, err := getSelectors()
-	if err != nil {
-		return err
-	}
-
-	if viper.GetBool("pods") {
-		namespace, _, err := gc.configFlags.ToRawKubeConfigLoader().Namespace()
-		if err != nil {
-			log.Debugf("Failed to determine namespace: %v", err)
-			namespace = "default"
-		}
-
-		for _, node := range nodes.Items {
-			podList := &v1.PodList{Items: podsByNode[node.Name]}
-			if existing, ok := nm[node.Name]; ok {
-				existing.PodInfo = getPodsInfo(ctx, podList, metricsClientset, labelSelector, namespace)
-			}
-		}
-	}
-
 	// Fetch cloud info asynchronously for all nodes if enabled
 	if viper.GetBool("show-cloud-provider") {
 		cache := cloud.NewCache(viper.GetDuration("cloud-cache-ttl"), viper.GetBool("cloud-cache-disk"))
@@ -548,21 +521,6 @@ func buildNodeMetricsByName(
 	return result, nil
 }
 
-func getPodsInfo(
-	ctx context.Context,
-	podList *v1.PodList,
-	metricsClient metricsclientset.Interface,
-	selector labels.Selector,
-	namespace string,
-) map[string]*PodInfo {
-	podMap := make(map[string]*PodInfo)
-	for i := range podList.Items {
-		n := podList.Items[i].Name
-		_, _ = getPodMetricsFromMetricsAPI(ctx, metricsClient, n, namespace, selector)
-	}
-	return podMap
-}
-
 // getSelectors parses the --selector (label) and --field-selector flags.
 // They use different syntaxes and are sent to the API server separately, so
 // each is parsed on its own. Unset flags yield selectors that match everything.
@@ -578,32 +536,6 @@ func getSelectors() (labels.Selector, fields.Selector, error) {
 	}
 
 	return labelSelector, fieldSelector, nil
-}
-
-// nolint interfacer
-func getPodMetricsFromMetricsAPI(ctx context.Context, metricsClient metricsclientset.Interface, resourceName string, namespace string, selector labels.Selector) (*metricsapi.PodMetricsList, error) {
-	var err error
-	versionedMetrics := &metricsV1beta1api.PodMetricsList{}
-	mc := metricsClient.MetricsV1beta1()
-	pm := mc.PodMetricses(namespace)
-	if resourceName != "" {
-		m, err := pm.Get(ctx, resourceName, metav1.GetOptions{})
-		if err != nil {
-			return nil, err
-		}
-		versionedMetrics.Items = []metricsV1beta1api.PodMetrics{*m}
-	} else {
-		versionedMetrics, err = pm.List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
-		if err != nil {
-			return nil, err
-		}
-	}
-	metrics := &metricsapi.PodMetricsList{}
-	err = metricsV1beta1api.Convert_v1beta1_PodMetricsList_To_metrics_PodMetricsList(versionedMetrics, metrics, nil)
-	if err != nil {
-		return nil, err
-	}
-	return metrics, nil
 }
 
 func getCloudInfo(ctx context.Context, cache *cloud.Cache, n *v1.Node, ns *NodeStats, wg *sync.WaitGroup) {
